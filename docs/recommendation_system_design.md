@@ -274,20 +274,107 @@ The variance provides confidence intervals—recommend movies with high expected
 
 ### V2 Roadmap
 
-| Phase | Description |
-|-------|-------------|
-| V2.1 | Implement basic IRT model with fixed K |
-| V2.2 | Add variational inference with stochastic updates |
-| V2.3 | Non-symmetric priors for identifiability |
-| V2.4 | Uncertainty-aware recommendations |
-| V2.5 | Compare V1 vs V2 on held-out ratings |
+| Phase | Description | Status |
+|-------|-------------|--------|
+| V2.1 | Implement basic IRT model with fixed K | Done |
+| V2.2 | Add variational inference with stochastic updates | Done |
+| V2.3 | Non-symmetric priors for identifiability | Done |
+| V2.4 | Uncertainty-aware recommendations | Done |
+| V2.5 | Model diagnostics and validation | In Progress |
+| V2.6 | Compare V1 vs V2 on held-out ratings | Planned |
+
+### V2 Model Diagnostics
+
+After initial training (20 epochs, K=20), recommendations showed red flags:
+- All predictions > 10 (outside valid 1-10 range)
+- Dominated by obscure films (<5K votes)
+- Some low IMDb scores (4.1, 4.8) predicted as 10+
+- High uncertainty (±1.3 to ±2.0) across all predictions
+
+**Diagnostic checks to implement:**
+
+#### 1. Training Convergence
+```python
+# Plot ELBO over epochs
+plt.plot(trainer.history['elbo'])
+plt.xlabel('Epoch')
+plt.ylabel('ELBO')
+# Should show convergence, not plateau or oscillation
+```
+
+#### 2. Prediction Distribution
+```python
+# Histogram of predictions for all candidate movies
+# Should center around population mean (~3.5), not 10+
+plt.hist(all_predictions, bins=50)
+```
+
+#### 3. Calibration on Known Ratings
+**Critical check**: For movies the user has rated, compare prediction vs actual.
+
+```python
+# For each movie in user_ratings.csv:
+#   - Get model's prediction
+#   - Compare to actual rating
+#   - Compute MAE, RMSE, correlation
+
+# Example output:
+# Movie                      | Actual | Predicted | Error
+# The Big Lebowski           | 10     | ???       | ???
+# Before Sunset              | 10     | ???       | ???
+# The Bourne Identity        | 10     | ???       | ???
+# (user's favorites - model should predict high)
+```
+
+If the model predicts 10+ for movies the user rated 5, or 5 for movies rated 10, something is wrong.
+
+#### 4. Vote Count vs Prediction
+```python
+# Scatter plot: x = log(numVotes), y = predicted rating
+# Check if rare movies systematically get extreme predictions
+```
+
+Hypothesis: Movies with few ratings have high-variance β factors. When sampled or point-estimated, these can produce outlier predictions.
+
+#### 5. Latent Factor Inspection
+```python
+# Check item factor magnitudes
+item_norms = torch.norm(model.item_mu, dim=1)
+# Are some items extreme? Correlate with vote count.
+
+# Check user factor magnitude
+user_norm = torch.norm(user_mu)
+# Is it reasonable?
+```
+
+#### 6. Rating Scale Check
+MovieLens uses 0.5-5.0 scale, user ratings are 1-10.
+- Verify data_loader handles this correctly
+- Check global_mean learned by model (should be ~3.5 for MovieLens)
+- User bias should account for scale difference
+
+**Potential fixes if diagnostics reveal issues:**
+
+| Problem | Fix |
+|---------|-----|
+| Predictions unbounded | Clip to [1,10] or use sigmoid output |
+| Rare items get extreme scores | Filter by min vote count, or add popularity prior |
+| Poor calibration on known ratings | Check rating scale handling, retrain with adjusted priors |
+| ELBO not converged | More epochs, adjust learning rate |
+| Item factors exploding | Stronger regularization (tighter priors) |
 
 ## Success Metrics
 
-1. **Coverage**: % of IMDb catalog with predictions
-2. **Confidence**: Average number of neighbors per prediction
-3. **Diversity**: Genre distribution of recommendations
-4. **User validation**: Do recommendations match user preferences?
+### V1 (Pearson-based)
+1. **Coverage**: % of catalog with predictions
+2. **Confidence**: Number of neighbors per prediction
+3. **MAE on held-out**: 1.18 (from leave-one-out evaluation)
+
+### V2 (IRT model)
+1. **ELBO convergence**: Training loss should plateau
+2. **Calibration**: Predictions for known ratings should correlate with actuals
+3. **Prediction range**: Should be within [1, 10], centered reasonably
+4. **Uncertainty calibration**: High-confidence predictions should be more accurate
 
 ## Dependencies
 
@@ -296,13 +383,18 @@ pandas>=2.0.0
 numpy>=1.24.0
 scipy>=1.10.0
 duckdb>=1.0.0
+torch>=2.0.0
+tqdm>=4.65.0
 ```
 
 ## Next Steps
 
-1. [ ] Implement data_loader.py - join MovieLens + IMDb
-2. [ ] Implement similarity.py - Pearson correlation
-3. [ ] Implement recommender.py - prediction engine
-4. [ ] Build CLI for generating recommendations
-5. [ ] Test with user's 35 ratings
-6. [ ] Evaluate and tune K parameter
+1. [x] Implement data_loader.py - join MovieLens + IMDb
+2. [x] Implement similarity.py - Pearson correlation (V1)
+3. [x] Implement recommender.py - prediction engine (V1)
+4. [x] Implement irt_model.py - IRT with VI (V2)
+5. [x] Build CLI for generating recommendations
+6. [ ] **Run model diagnostics on trained model**
+7. [ ] Fix any issues revealed by diagnostics
+8. [ ] Compare V1 vs V2 predictions
+9. [ ] Implement preference elicitation system (V3)
