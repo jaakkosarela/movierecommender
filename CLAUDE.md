@@ -17,14 +17,14 @@ A **collaborative filtering movie recommendation system** that uses MovieLens 25
 src/
 ├── __init__.py
 ├── data_loader.py      # Load and join MovieLens + IMDb data
-├── similarity.py       # User similarity calculations (Pearson)
-├── recommender.py      # Core recommendation engine
-└── cli.py              # Command-line interface
+├── similarity.py       # User similarity calculations (Pearson) [V1]
+├── recommender.py      # Core recommendation engine [V1]
+└── irt_model.py        # IRT latent factor model with VI [V2]
 
 scripts/
 ├── analyze_*.py        # Ad-hoc analysis scripts (actors, directors, etc.)
-├── build_user_index.py # Precompute user similarity matrix
-└── recommend.py        # Generate recommendations for user
+├── recommend.py        # Generate recommendations (V1 Pearson-based)
+└── train_irt.py        # Train IRT model and generate recommendations (V2)
 
 data/
 ├── ml-25m/             # MovieLens 25M dataset
@@ -32,16 +32,19 @@ data/
 │   ├── links.csv       # MovieLens → IMDb mapping
 │   └── movies.csv      # Titles and genres
 ├── *.tsv               # IMDb datasets (basics, ratings, principals, names)
-├── *.tsv.gz            # IMDb compressed originals
-└── user_ratings.csv    # User's personal IMDb ratings
+├── user_ratings.csv    # User's personal IMDb ratings
+├── pairwise_comparisons.jsonl  # Binary preference data (future)
+└── sessions.jsonl      # Elicitation session logs (future)
 
-results/
-└── recommendations/    # Generated recommendation outputs
+models/
+└── *.pt                # Trained IRT model checkpoints
 
 docs/
-├── recommendation_system_design.md  # Algorithm design document
+├── recommendation_system_design.md   # Algorithm design (V1 + V2)
+├── preference_elicitation_design.md  # Binary preference system design
+├── future_ideas.md                   # Ideas for improvements
 └── compacting/
-    └── compacting_summary.md        # Session continuity notes
+    └── compacting_summary.md         # Session continuity notes
 ```
 
 ## Common Commands
@@ -71,7 +74,7 @@ ruff check src/ scripts/
 |--------|------|-----------|
 | **MovieLens 25M** | 25M ratings, 162K users | ratings.csv, links.csv |
 | **IMDb** | 12M titles, 15M people | title.basics.tsv, title.principals.tsv |
-| **User ratings** | ~35 movies | data/user_ratings.csv |
+| **User ratings** | 82 movies (70 in MovieLens) | data/user_ratings.csv |
 
 ## Environment
 
@@ -89,7 +92,8 @@ pip install -r requirements.txt
 ### Dependencies
 - pandas, numpy, scipy - Data manipulation
 - duckdb - Fast SQL queries on large files
-- (future) scikit-learn - ML utilities
+- torch - IRT model and variational inference
+- tqdm - Progress bars
 
 ## Modes of Operation
 
@@ -155,19 +159,35 @@ After compacting, check `docs/compacting/compacting_summary.md` for where we lef
 
 ## Key Design Decisions
 
+### V1: Pearson-based Collaborative Filtering
 1. **User-based collaborative filtering** - Find similar MovieLens users, predict ratings
 2. **Pearson correlation** - Handles user rating bias (user rates +0.9 vs IMDb average)
 3. **K=50 neighborhood** - Balance between signal and noise
 4. **IMDb enrichment** - Add director, cast, metadata to recommendations
-5. **Quality threshold** - Filter to IMDb ≥7.0 (user prefers quality films)
+
+### V2: IRT Latent Factor Model
+1. **Item Response Theory** - Latent factors for users (θ) and items (β)
+2. **Variational inference** - Scales to 25M ratings with stochastic mini-batches
+3. **Non-symmetric priors** - Decreasing variance per dimension breaks rotational invariance
+4. **SVD initialization** - Warm start for faster convergence
+5. **Uncertainty quantification** - Predictions include confidence intervals
+
+### Preference Elicitation (Designed, Not Implemented)
+1. **Binary comparisons** - "Do you prefer A or B?" easier than absolute ratings
+2. **Max entropy sampling** - Select pairs where model is most uncertain
+3. **Versioned logging** - All comparisons saved for experimentation
+4. **IMDb-only movies supported** - Via comparison-based rating against anchors
 
 ## Implementation Roadmap
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| **A** | Data exploration and actor/director analysis | Done |
-| **B** | Algorithm design document | Done |
-| **C** | Implement data loader (MovieLens + IMDb join) | Next |
-| **D** | Implement similarity computation | Planned |
-| **E** | Implement recommendation engine | Planned |
-| **F** | Build CLI and test with user ratings | Planned |
+| **V1** | Pearson-based collaborative filtering | Done |
+| **V2** | IRT model with variational inference | Done |
+| **V2.1** | Train production model (20 epochs) | Next |
+| **V3** | Preference elicitation system | Designed |
+| **V3.1** | Data schema and logging utilities | Planned |
+| **V3.2** | Sampling strategies (max_entropy, adaptive) | Planned |
+| **V3.3** | CLI for calibration mode | Planned |
+| **V3.4** | CLI for new movie rating mode | Planned |
+| **V3.5** | Factor update from comparisons | Planned |
