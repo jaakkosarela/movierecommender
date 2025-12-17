@@ -49,7 +49,28 @@ Built V2 recommendation system using Item Response Theory with variational infer
 - User bias learned: +4.98 (user rates high relative to population)
 - Predictions > 10 possible (Gaussian likelihood unbounded) - clip at inference
 
-### Training Command for Tomorrow
+### Issue Identified (20 epochs, 20 factors)
+Full training run produced suspicious recommendations:
+- All predictions > 10 (outside valid 1-10 range)
+- Dominated by obscure films (<5K votes) user has never heard of
+- Some with poor IMDb scores (4.1, 4.8) predicted as 10+
+- High uncertainty (±1.3 to ±2.0) across all predictions
+
+**Added diagnostics section to design doc** with 6 checks:
+1. Training convergence (ELBO plot)
+2. Prediction distribution
+3. **Calibration on known ratings** (critical - check user's favorites)
+4. Vote count vs prediction
+5. Latent factor inspection
+6. Rating scale check (MovieLens 0.5-5 vs user 1-10)
+
+### Next Steps (Updated)
+1. ~~Train IRT model with full parameters~~ Done, but needs diagnostics
+2. **Run model diagnostics, especially calibration on known ratings**
+3. Fix issues revealed by diagnostics
+4. Then proceed to preference elicitation
+
+### Training Command (Reference)
 ```bash
 PYTHONPATH=. python scripts/train_irt.py \
   --n-factors 20 \
