@@ -1,0 +1,38 @@
+# Data files (too large for git)
+data/ml-25m/
+data/ml-25m.zip
+data/*.tsv
+data/*.tsv.gz
+data/movie_cache.json
+
+# Keep user ratings and pairwise comparisons
+!data/user_ratings.csv
+!data/pairwise_comparisons.jsonl
+!data/sessions.jsonl
+
+# Models (large binary files)
+models/*.pt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
