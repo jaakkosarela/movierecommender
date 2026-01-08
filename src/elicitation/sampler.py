@@ -172,26 +172,33 @@ class AdaptiveBinarySearchSampler(BaseSampler):
     """Adaptive binary search for rating a new movie.
 
     Selects anchors to narrow down the rating range efficiently.
+    Prefers low-uncertainty anchors when selecting comparisons.
     """
 
     def __init__(
         self,
         target_movie: Movie,
         anchor_movies: list[Movie],
-        anchor_ratings: dict[str, float],  # tconst -> user's rating
+        anchor_ratings: dict[str, float],  # tconst -> rating (model pred or calibrated)
         model_prediction: Optional[float] = None,
+        anchor_uncertainties: Optional[dict[str, float]] = None,  # tconst -> std
+        uncertainty_weight: float = 0.5,  # how much to penalize uncertainty
     ):
         """
         Args:
             target_movie: The movie being rated
             anchor_movies: Rated movies to compare against
-            anchor_ratings: User's actual ratings for anchors
+            anchor_ratings: Ratings for anchors (model predictions or calibrated)
             model_prediction: Model's prediction for target (if in MovieLens)
+            anchor_uncertainties: Model uncertainty (std) for each anchor
+            uncertainty_weight: Weight for preferring low-uncertainty anchors
         """
         self.target_movie = target_movie
         self.anchor_movies = anchor_movies
         self.anchor_ratings = anchor_ratings
         self.model_prediction = model_prediction
+        self.anchor_uncertainties = anchor_uncertainties or {}
+        self.uncertainty_weight = uncertainty_weight
 
         # Sort anchors by rating
         self.anchors_sorted = sorted(
@@ -217,10 +224,18 @@ class AdaptiveBinarySearchSampler(BaseSampler):
         self._used_anchors: set[str] = set()
 
     def sample_pair(self) -> Optional[CandidatePair]:
-        """Select next anchor for binary search."""
-        # Find anchor closest to current estimate that hasn't been used
+        """Select next anchor for binary search.
+
+        Prefers anchors that are:
+        1. Close to current estimate (informative for binary search)
+        2. Within the valid rating range
+        3. Low uncertainty (more reliable as anchors)
+
+        Score = distance + uncertainty_weight * uncertainty
+        Lower score is better.
+        """
         best_anchor = None
-        best_distance = float("inf")
+        best_score = float("inf")
 
         for movie, rating in self.anchors_sorted:
             if movie.tconst in self._used_anchors:
@@ -231,16 +246,24 @@ class AdaptiveBinarySearchSampler(BaseSampler):
                 continue
 
             distance = abs(rating - self._current_estimate)
-            if distance < best_distance:
-                best_distance = distance
+            uncertainty = self.anchor_uncertainties.get(movie.tconst, 0.0)
+
+            # Lower score = better (close + certain)
+            score = distance + self.uncertainty_weight * uncertainty
+
+            if score < best_score:
+                best_score = score
                 best_anchor = (movie, rating)
 
         if best_anchor is None:
-            # No more valid anchors, try any unused anchor
+            # No more valid anchors, try any unused anchor (prefer low uncertainty)
+            best_score = float("inf")
             for movie, rating in self.anchors_sorted:
                 if movie.tconst not in self._used_anchors:
-                    best_anchor = (movie, rating)
-                    break
+                    uncertainty = self.anchor_uncertainties.get(movie.tconst, 0.0)
+                    if uncertainty < best_score:
+                        best_score = uncertainty
+                        best_anchor = (movie, rating)
 
         if best_anchor is None:
             return None

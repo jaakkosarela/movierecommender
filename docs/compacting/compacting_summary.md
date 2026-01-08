@@ -4,6 +4,175 @@ Reverse chronological order (newest first).
 
 ---
 
+## 2026-01-08 (Session 10): Anchor Improvements & Prediction Tracking
+
+### Current Status
+Enhanced calibration accuracy with model predictions as anchors. Added prediction snapshots and movers tracking.
+
+### Completed Work
+
+1. **`--mine` Enhancements** (`scripts/recommend_irt.py`):
+   - New columns: Pred, ±, New, Orig, Diff
+   - Sort by best available: pred > new > orig
+   - Bold highlighting for high uncertainty (±≥2.0) or big diff (|Δ|≥1.5)
+   - Shows calibration priorities at a glance
+
+2. **Model Predictions as Anchor Ratings** (`scripts/elicit_preferences.py`):
+   - Anchors now use model predictions instead of original IMDb ratings
+   - Calibrated ratings (from `rating_events.jsonl`) take precedence
+   - Enables finer-grained rating precision
+
+3. **Expanded Anchor Pool**:
+   - Includes comparison-rated items from `rating_events.jsonl` (if in MovieLens)
+   - More anchors = better bracketing for new ratings
+
+4. **Uncertainty-Aware Anchor Selection** (`src/elicitation/sampler.py`):
+   - `AdaptiveBinarySearchSampler` accepts `anchor_uncertainties`
+   - Selection score = distance + uncertainty_weight × uncertainty
+   - Prefers anchors that are close AND low-uncertainty
+   - Calibrated items get 50% lower uncertainty (more trusted)
+
+5. **Prediction Snapshots & Movers** (`scripts/update_factors.py`):
+   - Saves predictions to `models/prediction_snapshot.json` after each update
+   - Shows top movers (biggest Δ) compared to previous snapshot
+   - Tracks n_comparisons, n_ratings, user_bias in metadata
+
+6. **Non-MovieLens Rating Re-estimation**:
+   - Re-estimates ratings for items not in MovieLens using Bradley-Terry MLE
+   - Uses current model predictions as anchor ratings
+   - Shows non-MovieLens movers separately
+   - Saves updated ratings to `rating_events.jsonl` (source: "reestimation")
+   - For items with ≤2 comparisons, uses midpoint of confidence bounds
+
+### Key Files Modified
+- `scripts/recommend_irt.py` - --mine with ±, bold highlighting
+- `scripts/elicit_preferences.py` - model predictions as anchors, expanded pool
+- `scripts/update_factors.py` - snapshots, movers, non-ML re-estimation
+- `src/elicitation/sampler.py` - uncertainty-aware anchor selection
+
+### Example Output
+
+**`--mine` with uncertainty:**
+```
+Rank Title                                        Pred     ±    New   Orig   Diff
+-------------------------------------------------------------------------------------
+15   Princess Bride, The (1987)                    9.2   0.5      -    7.0   +2.2  [BOLD]
+23   The Irishman (2019)                           9.1   2.0      -    6.0   +3.1  [BOLD]
+```
+
+**Movers after update:**
+```
+Top 10 movers:
+----------------------------------------------------------------------
+Title                                             Old     New       Δ
+----------------------------------------------------------------------
+Marriage Story (2019)                             8.6     8.0   -0.67
+The Irishman (2019)                               9.1     8.5   -0.61
+...
+```
+
+**Non-MovieLens re-estimation:**
+```
+Non-MovieLens rating updates:
+------------------------------------------------------------
+Title                                        Old     New      Δ
+------------------------------------------------------------
+Oppenheimer                                  7.5     9.0   +1.5
+State of Play                                8.0     9.2   +1.2
+```
+
+### Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| Model predictions as anchors | More accurate than original IMDb ratings, enables finer precision |
+| Calibrated ratings take precedence | Explicit recalibrations are more recent/accurate |
+| Uncertainty-weighted selection | Prefer confident anchors for reliable calibration |
+| Bradley-Terry MLE for non-ML | Re-estimate as anchor ratings shift |
+| Midpoint for few comparisons | MLE can be extreme with little data |
+
+### Pending
+- P8: Analysis tools for logged comparisons
+
+---
+
+## 2026-01-08 (Session 9): Recommender & Elicitation Enhancements
+
+### Current Status
+Full system operational with many UX improvements. Ready for daily use.
+
+### Completed Work
+
+1. **Recommender Enhancements** (`scripts/recommend_irt.py`):
+   - `--genre` filter (multiple allowed, AND logic)
+   - `--list-genres` to show available genres
+   - `--mine` to show your rated movies/series ranked by prediction
+   - Now loads from user checkpoint instead of refitting each time
+   - Added `--user-checkpoint` flag
+
+2. **TV Series Support**:
+   - Movie search now includes `tvSeries` and `tvMiniSeries`
+   - `Movie.title_type` field and `type_label()` method (`[series]`, `[mini]`)
+   - Rate mode: can rate series via comparisons against movie anchors
+   - Calibrate mode: series can be calibration targets (not anchors)
+   - Series excluded from θ updates (no item factors in model)
+
+3. **Rate Mode Improvements**:
+   - `--year` flag for filtering search results
+   - Interactive: `m` for more results, `y` to add year filter
+   - Increased default search limit to 10 (up to 50 with `m`)
+   - Tighter convergence threshold: 0.5 instead of 1.0
+
+4. **Calibrate Mode Improvements**:
+   - Series can appear as targets (compared against movie anchors)
+   - `MaxEntropySampler` now supports asymmetric target/anchor pools
+
+5. **Skip Option**:
+   - Added `s` to skip comparisons in both calibrate and rate modes
+   - Skipped pairs marked as used, don't count toward round total
+   - Summary shows skipped count
+
+6. **--mine Mode Details**:
+   - Shows all rated items: movies in model, series, comparison-rated items
+   - Columns: Rank, Title, Predicted, Actual, Diff
+   - Items without model predictions show `-` for Pred/Diff
+   - Summary: "Total: 92 items (70 with model predictions, 22 without)"
+
+7. **Documentation**:
+   - Created `README.md` with full project documentation
+   - Updated `.gitignore` to exclude elicitation logs
+
+### Key Files Modified
+- `scripts/recommend_irt.py` - genre filter, --mine, user checkpoint
+- `scripts/elicit_preferences.py` - year filter, series support, skip option
+- `src/elicitation/sampler.py` - asymmetric target/anchor pools, 0.5 threshold
+- `src/elicitation/schemas.py` - Movie.title_type, type_label()
+- `src/elicitation/movie_search.py` - include tvSeries/tvMiniSeries
+- `src/recommendation/thompson.py` - genre_filter parameter
+- `README.md` - new
+- `.gitignore` - exclude elicitation logs
+
+### Usage Examples
+```bash
+# Recommendations with genre filter
+PYTHONPATH=. python scripts/recommend_irt.py --genre Thriller --top-n 20
+
+# Your rated items ranked by prediction
+PYTHONPATH=. python scripts/recommend_irt.py --mine --top-n 100
+
+# Rate a movie with year filter
+PYTHONPATH=. python scripts/elicit_preferences.py rate "No Way Out" --year 1987
+
+# Calibrate (includes series)
+PYTHONPATH=. python scripts/elicit_preferences.py calibrate --n-rounds 20
+```
+
+### Pending
+- Commit changes (user will commit manually)
+- P8: Analysis tools for logged comparisons
+
+---
+
 ## 2025-12-28 (Session 8): P7 Complete - Update Factors from Comparisons
 
 ### Current Status

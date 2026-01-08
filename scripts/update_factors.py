@@ -10,13 +10,16 @@ This script:
 """
 
 import argparse
+import json
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import torch
 import torch.nn as nn
 import numpy as np
+import pandas as pd
 
 from src.irt_model import IRTModel, IRTConfig
 from src.elicitation import ComparisonLogger
@@ -70,6 +73,360 @@ class UserCheckpoint:
             n_comparisons_used=data["n_comparisons_used"],
             n_ratings_used=data["n_ratings_used"],
         )
+
+
+def compute_predictions(
+    model: IRTModel,
+    user_mu: torch.Tensor,
+    user_log_std: torch.Tensor,
+    user_bias: float,
+    item_indices: list[int],
+    idx_to_tconst: dict[int, str],
+) -> dict[str, dict]:
+    """Compute predictions for a set of items.
+
+    Returns:
+        Dict mapping tconst -> {pred, uncertainty}
+    """
+    predictions = {}
+    user_var = torch.exp(2 * user_log_std)
+
+    with torch.no_grad():
+        for item_idx in item_indices:
+            tconst = idx_to_tconst.get(item_idx)
+            if not tconst:
+                continue
+
+            item_mu = model.item_mu[item_idx]
+            item_var = torch.exp(2 * model.item_log_std[item_idx])
+
+            # Mean prediction
+            pred = (user_mu * item_mu).sum() + user_bias + model.item_bias_mu[item_idx] + model.global_mean
+            pred_scaled = (pred.item() - 0.5) / 4.5 * 9 + 1  # MovieLens to 1-10
+
+            # Uncertainty
+            var_rating = (user_var * item_var).sum()
+            var_rating = var_rating + (user_var * item_mu**2).sum()
+            var_rating = var_rating + (user_mu**2 * item_var).sum()
+            std_scaled = (torch.sqrt(var_rating).item()) / 4.5 * 9
+
+            predictions[tconst] = {
+                "pred": round(pred_scaled, 2),
+                "uncertainty": round(std_scaled, 2),
+            }
+
+    return predictions
+
+
+def load_snapshot(snapshot_path: Path) -> Optional[dict]:
+    """Load prediction snapshot from disk."""
+    if not snapshot_path.exists():
+        return None
+    with open(snapshot_path) as f:
+        return json.load(f)
+
+
+def save_snapshot(snapshot_path: Path, predictions: dict, metadata: dict) -> None:
+    """Save prediction snapshot to disk."""
+    snapshot = {
+        "timestamp": datetime.now().isoformat(),
+        "metadata": metadata,
+        "predictions": predictions,
+    }
+    with open(snapshot_path, "w") as f:
+        json.dump(snapshot, f, indent=2)
+    print(f"Saved prediction snapshot to {snapshot_path}")
+
+
+def show_top_movers(
+    old_preds: dict[str, dict],
+    new_preds: dict[str, dict],
+    tconst_to_title: dict[str, str],
+    top_n: int = 10,
+) -> None:
+    """Show items with biggest prediction changes."""
+    movers = []
+
+    for tconst, new_data in new_preds.items():
+        if tconst not in old_preds:
+            continue
+        old_data = old_preds[tconst]
+
+        old_pred = old_data["pred"]
+        new_pred = new_data["pred"]
+        delta = new_pred - old_pred
+
+        if abs(delta) < 0.01:
+            continue
+
+        title = tconst_to_title.get(tconst, tconst)
+        movers.append({
+            "tconst": tconst,
+            "title": title,
+            "old_pred": old_pred,
+            "new_pred": new_pred,
+            "delta": delta,
+            "abs_delta": abs(delta),
+        })
+
+    # Sort by absolute delta (log scale weighting would be: abs_delta / old_pred)
+    movers.sort(key=lambda x: -x["abs_delta"])
+
+    if not movers:
+        print("\nNo significant prediction changes.")
+        return
+
+    print(f"\nTop {min(top_n, len(movers))} movers:")
+    print("-" * 70)
+    print(f"{'Title':<45} {'Old':>7} {'New':>7} {'Δ':>7}")
+    print("-" * 70)
+
+    for m in movers[:top_n]:
+        title = m["title"][:43] + ".." if len(m["title"]) > 45 else m["title"]
+        delta_str = f"{m['delta']:+.2f}"
+        print(f"{title:<45} {m['old_pred']:>7.1f} {m['new_pred']:>7.1f} {delta_str:>7}")
+
+    print("-" * 70)
+
+
+def find_non_movielens_items_with_comparisons(
+    comparisons: list[dict],
+    tconst_to_idx: dict[str, int],
+) -> dict[str, list[dict]]:
+    """Find items not in MovieLens that have pairwise comparisons.
+
+    Returns:
+        Dict mapping tconst -> list of comparisons involving that item
+    """
+    non_ml_comparisons = {}  # tconst -> [comparisons]
+
+    for comp in comparisons:
+        movie_a = comp.get("movie_a", {})
+        movie_b = comp.get("movie_b", {})
+        tconst_a = movie_a.get("tconst")
+        tconst_b = movie_b.get("tconst")
+        choice = comp.get("choice")
+
+        if not tconst_a or not tconst_b or choice not in ["a", "b"]:
+            continue
+
+        # Check if either is non-MovieLens
+        a_in_ml = tconst_a in tconst_to_idx
+        b_in_ml = tconst_b in tconst_to_idx
+
+        # We need at least one to be in MovieLens (as anchor)
+        if not a_in_ml and not b_in_ml:
+            continue
+
+        # If A is non-MovieLens and B is in MovieLens
+        if not a_in_ml and b_in_ml:
+            if tconst_a not in non_ml_comparisons:
+                non_ml_comparisons[tconst_a] = []
+            non_ml_comparisons[tconst_a].append({
+                "anchor_tconst": tconst_b,
+                "target_preferred": choice == "a",
+                "target_title": movie_a.get("title"),
+                "target_year": movie_a.get("year"),
+            })
+
+        # If B is non-MovieLens and A is in MovieLens
+        if not b_in_ml and a_in_ml:
+            if tconst_b not in non_ml_comparisons:
+                non_ml_comparisons[tconst_b] = []
+            non_ml_comparisons[tconst_b].append({
+                "anchor_tconst": tconst_a,
+                "target_preferred": choice == "b",
+                "target_title": movie_b.get("title"),
+                "target_year": movie_b.get("year"),
+            })
+
+    return non_ml_comparisons
+
+
+def bradley_terry_mle(
+    comparisons: list[dict],
+    anchor_ratings: dict[str, float],
+    initial_estimate: float = 7.0,
+    n_iter: int = 50,
+    lr: float = 0.5,
+) -> tuple[float, float, float]:
+    """Estimate rating for an item using Bradley-Terry MLE.
+
+    Args:
+        comparisons: List of {anchor_tconst, target_preferred}
+        anchor_ratings: Dict mapping anchor tconst -> rating
+        initial_estimate: Starting point for optimization
+        n_iter: Number of gradient descent iterations
+        lr: Learning rate
+
+    Returns:
+        (estimated_rating, confidence_low, confidence_high)
+    """
+    # Filter to comparisons where we have anchor ratings
+    valid_comps = [
+        c for c in comparisons
+        if c["anchor_tconst"] in anchor_ratings
+    ]
+
+    if not valid_comps:
+        return initial_estimate, initial_estimate - 1, initial_estimate + 1
+
+    # Gradient descent to find MLE
+    rating = initial_estimate
+
+    for _ in range(n_iter):
+        grad = 0.0
+        for comp in valid_comps:
+            anchor_rating = anchor_ratings[comp["anchor_tconst"]]
+            diff = rating - anchor_rating
+
+            # P(target wins) = sigmoid(diff)
+            p_target = 1 / (1 + np.exp(-diff))
+
+            # Gradient of log-likelihood
+            if comp["target_preferred"]:
+                grad += (1 - p_target)  # d/dr log(sigmoid(r - a))
+            else:
+                grad -= p_target  # d/dr log(1 - sigmoid(r - a))
+
+        rating += lr * grad
+
+        # Clamp to reasonable range
+        rating = max(1.0, min(10.0, rating))
+
+    # Estimate confidence bounds from anchor ratings used
+    anchor_vals = [anchor_ratings[c["anchor_tconst"]] for c in valid_comps]
+    wins = [c for c in valid_comps if c["target_preferred"]]
+    losses = [c for c in valid_comps if not c["target_preferred"]]
+
+    # Lower bound: highest anchor we beat
+    if wins:
+        win_anchors = [anchor_ratings[c["anchor_tconst"]] for c in wins]
+        conf_low = max(win_anchors)
+    else:
+        conf_low = min(anchor_vals) - 0.5
+
+    # Upper bound: lowest anchor that beat us
+    if losses:
+        loss_anchors = [anchor_ratings[c["anchor_tconst"]] for c in losses]
+        conf_high = min(loss_anchors)
+    else:
+        conf_high = max(anchor_vals) + 0.5
+
+    # Clamp estimate to confidence bounds (midpoint if bounds are reasonable)
+    if conf_low <= conf_high:
+        rating = max(conf_low, min(conf_high, rating))
+        # With few comparisons, use midpoint as estimate
+        if len(valid_comps) <= 2:
+            rating = (conf_low + conf_high) / 2
+    else:
+        # Bounds inverted (inconsistent comparisons), use MLE estimate
+        pass
+
+    return round(rating, 1), round(conf_low, 1), round(conf_high, 1)
+
+
+def reestimate_non_movielens_ratings(
+    non_ml_items: dict[str, list[dict]],
+    model: IRTModel,
+    user_mu: torch.Tensor,
+    user_log_std: torch.Tensor,
+    user_bias: float,
+    tconst_to_idx: dict[str, int],
+    logger: ComparisonLogger,
+) -> list[dict]:
+    """Re-estimate ratings for non-MovieLens items using current model predictions.
+
+    Returns:
+        List of updated rating events
+    """
+    if not non_ml_items:
+        return []
+
+    # Get current model predictions for all anchors
+    anchor_ratings = {}
+    user_var = torch.exp(2 * user_log_std)
+
+    with torch.no_grad():
+        for tconst, item_idx in tconst_to_idx.items():
+            item_mu = model.item_mu[item_idx]
+
+            pred = (user_mu * item_mu).sum() + user_bias + model.item_bias_mu[item_idx] + model.global_mean
+            pred_scaled = (pred.item() - 0.5) / 4.5 * 9 + 1
+            anchor_ratings[tconst] = pred_scaled
+
+    # Re-estimate each non-MovieLens item
+    updated_ratings = []
+    for tconst, comparisons in non_ml_items.items():
+        # Get title/year from first comparison
+        title = comparisons[0].get("target_title", tconst)
+        year = comparisons[0].get("target_year")
+
+        # Get old rating if exists
+        old_ratings = logger.get_current_ratings()
+        old_rating = old_ratings.get(tconst)
+
+        # Re-estimate using Bradley-Terry
+        initial = old_rating if old_rating else 7.0
+        new_rating, conf_low, conf_high = bradley_terry_mle(
+            comparisons=comparisons,
+            anchor_ratings=anchor_ratings,
+            initial_estimate=initial,
+        )
+
+        updated_ratings.append({
+            "tconst": tconst,
+            "title": title,
+            "year": year,
+            "old_rating": old_rating,
+            "new_rating": new_rating,
+            "confidence_low": conf_low,
+            "confidence_high": conf_high,
+            "n_comparisons": len(comparisons),
+        })
+
+    return updated_ratings
+
+
+def save_updated_ratings(
+    updated_ratings: list[dict],
+    logger: ComparisonLogger,
+) -> None:
+    """Save re-estimated ratings to rating_events.jsonl."""
+    for r in updated_ratings:
+        if r["old_rating"] is None or abs(r["new_rating"] - r["old_rating"]) >= 0.1:
+            logger.log_rating(
+                tconst=r["tconst"],
+                title=r["title"],
+                year=r["year"],
+                rating=r["new_rating"],
+                confidence_low=r["confidence_low"],
+                confidence_high=r["confidence_high"],
+                n_comparisons=r["n_comparisons"],
+                session_id="update_factors",
+                source="reestimation",
+            )
+
+
+def show_non_ml_movers(updated_ratings: list[dict], top_n: int = 5) -> None:
+    """Show non-MovieLens items with rating changes."""
+    movers = [r for r in updated_ratings if r["old_rating"] is not None]
+    movers.sort(key=lambda x: -abs(x["new_rating"] - x["old_rating"]))
+
+    if not movers:
+        return
+
+    print(f"\nNon-MovieLens rating updates:")
+    print("-" * 60)
+    print(f"{'Title':<40} {'Old':>7} {'New':>7} {'Δ':>6}")
+    print("-" * 60)
+
+    for r in movers[:top_n]:
+        title = r["title"][:38] + ".." if len(r["title"]) > 40 else r["title"]
+        delta = r["new_rating"] - r["old_rating"]
+        print(f"{title:<40} {r['old_rating']:>7.1f} {r['new_rating']:>7.1f} {delta:>+6.1f}")
+
+    print("-" * 60)
 
 
 def load_main_model(model_path: str) -> tuple[IRTModel, dict]:
@@ -420,6 +777,17 @@ def main():
         action="store_true",
         help="Force update even if no new data",
     )
+    parser.add_argument(
+        "--snapshot",
+        default="models/prediction_snapshot.json",
+        help="Path to prediction snapshot for tracking movers",
+    )
+    parser.add_argument(
+        "--top-movers",
+        type=int,
+        default=10,
+        help="Number of top movers to show (default: 10)",
+    )
 
     args = parser.parse_args()
 
@@ -478,6 +846,88 @@ def main():
     print(f"\nUser bias: {checkpoint.bias_mu:.2f}")
     print(f"Comparisons used: {checkpoint.n_comparisons_used}")
     print(f"Ratings used: {checkpoint.n_ratings_used}")
+
+    # --- Re-estimate non-MovieLens ratings ---
+    all_comparisons = logger.load_comparisons()
+    non_ml_items = find_non_movielens_items_with_comparisons(all_comparisons, tconst_to_idx)
+
+    if non_ml_items:
+        print(f"\nRe-estimating {len(non_ml_items)} non-MovieLens items...")
+        updated_ratings = reestimate_non_movielens_ratings(
+            non_ml_items=non_ml_items,
+            model=model,
+            user_mu=checkpoint.theta_mu,
+            user_log_std=checkpoint.theta_log_std,
+            user_bias=checkpoint.bias_mu,
+            tconst_to_idx=tconst_to_idx,
+            logger=logger,
+        )
+
+        # Show movers
+        show_non_ml_movers(updated_ratings, top_n=args.top_movers)
+
+        # Save updated ratings
+        save_updated_ratings(updated_ratings, logger)
+
+    # --- Prediction snapshots and movers ---
+    snapshot_path = Path(args.snapshot)
+
+    # Build reverse mapping: item_idx -> tconst
+    idx_to_tconst = {v: k for k, v in tconst_to_idx.items()}
+
+    # Get item indices for rated items
+    rated_item_indices = list(imdb_ratings.keys())
+
+    # Compute new predictions
+    new_predictions = compute_predictions(
+        model=model,
+        user_mu=checkpoint.theta_mu,
+        user_log_std=checkpoint.theta_log_std,
+        user_bias=checkpoint.bias_mu,
+        item_indices=rated_item_indices,
+        idx_to_tconst=idx_to_tconst,
+    )
+
+    # Load previous snapshot and show movers
+    old_snapshot = load_snapshot(snapshot_path)
+    if old_snapshot is not None:
+        old_predictions = old_snapshot.get("predictions", {})
+
+        # Build tconst -> title mapping from movies.csv
+        movies_path = Path(args.links).parent / "movies.csv"
+        if movies_path.exists():
+            movies_df = pd.read_csv(movies_path)
+            movieid_to_title = dict(zip(movies_df["movieId"], movies_df["title"]))
+            tconst_to_title = {}
+            links_df = pd.read_csv(args.links)
+            links_df["tconst"] = "tt" + links_df["imdbId"].astype(str).str.zfill(7)
+            for _, row in links_df.iterrows():
+                tconst = row["tconst"]
+                movie_id = row["movieId"]
+                if movie_id in movieid_to_title:
+                    tconst_to_title[tconst] = movieid_to_title[movie_id]
+        else:
+            tconst_to_title = {}
+
+        show_top_movers(
+            old_preds=old_predictions,
+            new_preds=new_predictions,
+            tconst_to_title=tconst_to_title,
+            top_n=args.top_movers,
+        )
+    else:
+        print("\nNo previous snapshot found. Creating initial snapshot.")
+
+    # Save new snapshot
+    save_snapshot(
+        snapshot_path=snapshot_path,
+        predictions=new_predictions,
+        metadata={
+            "n_comparisons": checkpoint.n_comparisons_used,
+            "n_ratings": checkpoint.n_ratings_used,
+            "user_bias": checkpoint.bias_mu,
+        },
+    )
 
 
 if __name__ == "__main__":

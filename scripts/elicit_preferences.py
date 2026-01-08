@@ -360,16 +360,50 @@ def run_rate(args: argparse.Namespace) -> None:
             print(f"Model prediction: {model_pred:.1f} ± {model_uncertainty:.1f}")
 
     # Get anchor movies (exclude target to avoid self-comparison)
+    # Use model predictions as anchor ratings, with uncertainties
     predictions = model.get_predictions_for_rated_movies()
+
+    # Also include comparison-rated items that are in the model
+    comparison_ratings = logger.get_current_ratings()
+
     anchor_movies = []
-    anchor_ratings = {}
-    for tconst in predictions:
+    anchor_ratings = {}  # tconst -> model prediction (calibrated rating)
+    anchor_uncertainties = {}  # tconst -> model uncertainty
+
+    # Process all items with model predictions
+    for tconst, (pred_mean, pred_std) in predictions.items():
         if tconst == target_movie.tconst:
             continue  # don't compare against itself
+
         movie = searcher.get_by_tconst(tconst)
         if movie:
             anchor_movies.append(movie)
-            anchor_ratings[tconst] = model.get_user_rating(tconst)
+            # Use comparison-calibrated rating if available, else model prediction
+            if tconst in comparison_ratings:
+                anchor_ratings[tconst] = comparison_ratings[tconst]
+                # Lower uncertainty for explicitly calibrated items
+                anchor_uncertainties[tconst] = pred_std * 0.5
+            else:
+                anchor_ratings[tconst] = pred_mean
+                anchor_uncertainties[tconst] = pred_std
+
+    # Add comparison-rated items that are in model but not in original ratings
+    for tconst, rating in comparison_ratings.items():
+        if tconst == target_movie.tconst:
+            continue
+        if tconst in anchor_ratings:
+            continue  # already added
+        # Check if in model
+        pred = model.get_prediction(tconst)
+        if pred is not None:
+            movie = searcher.get_by_tconst(tconst)
+            if movie:
+                pred_mean, pred_std = pred
+                anchor_movies.append(movie)
+                anchor_ratings[tconst] = rating  # Use calibrated rating
+                anchor_uncertainties[tconst] = pred_std * 0.5
+
+    print(f"Using {len(anchor_movies)} anchors (model predictions + calibrated ratings)")
 
     # Initialize sampler
     sampler = AdaptiveBinarySearchSampler(
@@ -377,6 +411,7 @@ def run_rate(args: argparse.Namespace) -> None:
         anchor_movies=anchor_movies,
         anchor_ratings=anchor_ratings,
         model_prediction=model_pred,
+        anchor_uncertainties=anchor_uncertainties,
     )
 
     # Create session
