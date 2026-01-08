@@ -4,6 +4,376 @@ Reverse chronological order (newest first).
 
 ---
 
+## 2025-12-28 (Session 8): P7 Complete - Update Factors from Comparisons
+
+### Current Status
+P1-P7 complete. Full preference elicitation workflow operational. Only P8 (analysis tools) remains.
+
+### Completed Work
+
+1. **Information-Weighted Update Design**:
+   - Analyzed information content: 1 rating ≈ 2.5 bits, 1 max-entropy comparison ≈ 1 bit
+   - Comparisons weighted by stored entropy / 2.5 (normalized to rating scale)
+   - Elicitation ratings weighted by model_uncertainty (capped at 2.0)
+   - IMDb ratings weighted uniformly (no uncertainty info available)
+
+2. **User Theta Checkpoint** (`models/user_theta.pt`):
+   ```python
+   {
+       "theta_mu": tensor[20],        # User latent factors
+       "theta_log_std": tensor[20],   # Uncertainty in θ
+       "bias_mu": float,              # User bias
+       "comparisons_watermark": 27,   # Last comparison ID used
+       "ratings_watermark": "...",    # Last rating timestamp
+       "n_comparisons_used": 20,
+       "n_ratings_used": 71,
+   }
+   ```
+
+3. **Update Script** (`scripts/update_factors.py`):
+   - Loads main model (β fixed) + user checkpoint (if exists)
+   - Gets new comparisons via `get_comparisons_after(watermark)`
+   - Gets new ratings via `get_ratings_after(timestamp)`
+   - Combined likelihood: L_imdb + L_elicitation + L_comparisons (weighted)
+   - Bradley-Terry for comparisons: P(A>B) = sigmoid(pred_A - pred_B)
+   - Saves updated checkpoint with new watermarks
+
+4. **ModelInterface Updates**:
+   - Now loads from user checkpoint if available
+   - Falls back to `fit_new_user()` if no checkpoint
+   - Added `user_checkpoint_path` parameter
+
+5. **Logger Updates**:
+   - Added `model_uncertainty` field to rating events
+   - Added `get_ratings_after(timestamp)` for incremental updates
+   - Added `get_max_rating_timestamp()`
+
+6. **CLI Updates**:
+   - Rate mode now passes `model_uncertainty` when saving rating
+
+### Full Workflow
+
+```bash
+# 1. Run calibration (logs comparisons)
+PYTHONPATH=. python scripts/elicit_preferences.py calibrate --n-rounds 10
+
+# 2. Update θ from logged data
+PYTHONPATH=. python scripts/update_factors.py
+
+# 3. Next session uses updated θ
+PYTHONPATH=. python scripts/elicit_preferences.py calibrate --n-rounds 10
+```
+
+### Implementation Status
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| P1 | Data schema and logging utilities | **Done** |
+| P2 | IMDb search with fuzzy matching | **Done** |
+| P3 | MovieLens lookup (model interface) | **Done** |
+| P4 | Sampling strategies | **Done** |
+| P5 | CLI for calibrate mode | **Done** |
+| P6 | CLI for rate mode | **Done** |
+| P7 | Factor update from comparisons | **Done** |
+| P8 | Analysis tools | Pending |
+
+### Key Files Modified
+- `src/elicitation/logger.py` - model_uncertainty, ratings watermark methods
+- `src/elicitation/model_interface.py` - loads from user checkpoint
+- `scripts/elicit_preferences.py` - passes model_uncertainty
+- `scripts/update_factors.py` - **new**, updates θ from comparisons + ratings
+
+### Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| Entropy-weighted comparisons | High-entropy (uncertain) pairs more informative |
+| Uncertainty-weighted ratings | Consistent with comparison weighting |
+| Separate user checkpoint | Main model β stays fixed, only θ updates |
+| Watermarks in checkpoint | Append-only logs, incremental updates |
+
+### Next Steps (P8)
+- Analysis tools for logged comparisons
+- Visualize θ drift over time
+- Compare predictions before/after calibration
+
+---
+
+## 2025-12-18 (Session 7): Preference Elicitation CLI Complete (P1-P6)
+
+### Current Status
+Preference elicitation system fully implemented and ready to use. P1-P6 complete. P7 (θ update from comparisons) and P8 (analysis tools) remain.
+
+### Completed Work
+
+1. **Refined Data Schema** (`schemas.py`):
+   - Added `UserRatings` - user's actual ratings for compared movies
+   - Added `SamplingInfo` - strategy name + entropy at selection time
+   - Added `model_version` to `ModelPrediction`
+   - Comparison IDs now sequential (`cmp_000001`, `cmp_000002`, ...)
+
+2. **Model Interface** (`model_interface.py`):
+   - Loads trained IRT model from checkpoint
+   - Maps tconst → MovieLens ID → model item index
+   - Fits user θ from ratings via `fit_new_user()`
+   - `get_prediction(tconst)` returns (mean, std) on 1-10 scale
+   - `get_predictions_for_rated_movies()` for calibration
+
+3. **Enhanced Logger** (`logger.py`):
+   - Sequential comparison IDs (scans file on init to continue sequence)
+   - `get_comparisons_after(watermark)` for θ update script
+   - `log_rating()` for rating events
+   - `get_current_ratings()` returns latest rating per movie
+
+4. **CLI** (`scripts/elicit_preferences.py`):
+   - **Calibrate mode**: `PYTHONPATH=. python scripts/elicit_preferences.py calibrate --n-rounds 20`
+     - Max entropy sampling (pairs where P(A>B) ≈ 0.5)
+     - Excludes previously shown pairs (no repeats across sessions)
+     - Model confidence shown only AFTER user chooses (no bias)
+   - **Rate mode**: `PYTHONPATH=. python scripts/elicit_preferences.py rate "Oppenheimer"`
+     - Fuzzy IMDb search, user selects from results
+     - Checks if already rated, asks to re-rate
+     - Excludes target from anchors (no self-comparison)
+     - ~7 comparisons via adaptive binary search
+     - Saves to `rating_events.jsonl`
+
+5. **Data Files**:
+   ```
+   data/
+   ├── pairwise_comparisons.jsonl   # All comparisons (calibrate + rate)
+   ├── sessions.jsonl               # Session metadata
+   └── rating_events.jsonl          # Final ratings (append-only history)
+   ```
+
+6. **Bug Fixes**:
+   - Fixed NaN title handling in movie search
+   - Fixed model checkpoint loading (different format than expected)
+   - Fixed user ratings CSV column names (Const vs tconst)
+
+### Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| Sequential comparison IDs | Enables watermark-based θ updates |
+| Watermark in checkpoint (not in comparison records) | Keeps comparison log immutable/append-only |
+| Exclude previous pairs in calibration | No repeats, fresh pairs each session |
+| Separate `rating_events.jsonl` | Full rating history, latest wins |
+| Don't show model confidence before choice | Avoid biasing user |
+
+### Implementation Status
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| P1 | Data schema and logging utilities | **Done** |
+| P2 | IMDb search with fuzzy matching | **Done** |
+| P3 | MovieLens lookup (model interface) | **Done** |
+| P4 | Sampling strategies | **Done** |
+| P5 | CLI for calibrate mode | **Done** |
+| P6 | CLI for rate mode | **Done** |
+| P7 | Factor update from comparisons | Pending |
+| P8 | Analysis tools | Pending |
+
+### Usage
+
+```bash
+# Calibrate: refine θ by comparing rated movies
+PYTHONPATH=. python scripts/elicit_preferences.py calibrate --n-rounds 20
+
+# Rate: rate a new movie via ~7 comparisons
+PYTHONPATH=. python scripts/elicit_preferences.py rate "Oppenheimer"
+```
+
+### Next Steps (P7)
+
+1. Create `scripts/update_factors.py`:
+   - Load model checkpoint with `comparisons_watermark`
+   - Get new comparisons via `logger.get_comparisons_after(watermark)`
+   - Update θ using Bradley-Terry likelihood
+   - Save new checkpoint with updated watermark
+
+2. Bradley-Terry likelihood:
+   ```
+   P(A > B | θ) = sigmoid(predicted_A - predicted_B)
+   LL = Σ [y_i * log(P) + (1-y_i) * log(1-P)]
+   ```
+
+### Key Files Modified
+- `src/elicitation/schemas.py` - added UserRatings, SamplingInfo, sequential IDs
+- `src/elicitation/logger.py` - sequential IDs, rating events, watermark support
+- `src/elicitation/model_interface.py` - new file, model loading + predictions
+- `src/elicitation/movie_search.py` - fixed NaN handling
+- `scripts/elicit_preferences.py` - new CLI for both modes
+
+---
+
+## 2025-12-18 (Session 6): Preference Elicitation Implementation (P1-P4)
+
+### Current Status
+Started implementing the preference elicitation system. Completed P1, P2, P4. P3, P5, P6 remain.
+
+### Completed Work
+
+1. **Clarified Use Cases** - 2 user-facing modes:
+   - **Calibrate**: System asks about movies where `|predicted - actual| > threshold`
+   - **Rate**: User enters movie title, system handles MovieLens lookup internally
+
+2. **Created `src/elicitation/` package**:
+   ```
+   src/elicitation/
+   ├── __init__.py          # Package exports
+   ├── schemas.py           # Data classes
+   ├── logger.py            # JSONL logging
+   ├── sampler.py           # Sampling strategies
+   └── movie_search.py      # IMDb fuzzy search
+   ```
+
+3. **Schemas** (`schemas.py`):
+   - `Movie` - tconst, title, year, genres, movielens_id, model_prediction
+   - `Comparison` - movie_a, movie_b, choice, metadata, model_prediction
+   - `Session` - session tracking with use_case ("calibrate" or "rate")
+   - `RatingEstimate` - rating + confidence_low/high + n_comparisons
+   - `ComparisonChoice` - enum for "a" or "b"
+
+4. **Logger** (`logger.py`):
+   - `ComparisonLogger` class
+   - Appends to `data/pairwise_comparisons.jsonl` and `data/sessions.jsonl`
+   - Methods: `log_comparison()`, `log_session()`, `load_comparisons()`, `load_sessions()`
+
+5. **Samplers** (`sampler.py`):
+   - `MaxEntropySampler` - for calibration, picks pairs where P(A>B) ≈ 0.5
+   - `AdaptiveBinarySearchSampler` - for rating, binary search through anchors
+   - Uses Bradley-Terry model: P(A>B) = sigmoid(rating_A - rating_B)
+
+6. **Movie Search** (`movie_search.py`):
+   - `MovieSearcher` class - fuzzy search on IMDb title.basics.tsv
+   - Scoring: exact match (1.0) > starts with (0.9) > contains (0.8) > word overlap
+   - Returns `SearchResult` with Movie and score
+   - Checks MovieLens via links.csv, sets `movielens_id` if found
+
+7. **Updated design docs**:
+   - Simplified to 2 user-facing modes (calibrate, rate)
+   - Added selection bias section explaining why rare movies get inflated predictions
+   - Documented Bayesian approach (vote-count-dependent prior) as future consideration
+
+### Implementation Status
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| P1 | Data schema and logging utilities | **Done** |
+| P2 | IMDb search with fuzzy matching | **Done** |
+| P3 | MovieLens lookup (movie → model predictions) | Pending |
+| P4 | Sampling strategies | **Done** |
+| P5 | CLI for calibrate mode | Pending |
+| P6 | CLI for rate mode | Pending |
+| P7 | Factor update from comparisons | Pending |
+| P8 | Analysis tools | Pending |
+
+### Next Steps
+1. P3: Create model interface to get predictions for movies
+2. P5: Build CLI for calibrate mode
+3. P6: Build CLI for rate mode
+4. Test end-to-end flow
+
+### Key Files
+- `src/elicitation/` - new package (schemas, logger, sampler, movie_search)
+- `docs/preference_elicitation_design.md` - updated with 2-mode structure
+- `docs/recommendation_system_design.md` - added selection bias section
+
+---
+
+## 2025-12-17 (Session 5): Model Diagnostics & Thompson Sampling Design
+
+### Current Status
+V2 IRT model validated - calibration is good. Designed Thompson sampling with uncertainty shrinkage for recommendations.
+
+### Completed Work
+
+1. **Model Calibration Check** - `scripts/check_calibration.py`
+   - Model predictions on known ratings: MAE 0.58, RMSE 0.76, correlation 0.55
+   - Much better than V1 (MAE 1.18)
+   - Predictions in valid range [7.5, 9.4], not >10 as feared
+   - User bias correctly learned: +4.92
+
+2. **Diagnosed Recommendation Issue**
+   - Raw mean ranking dominated by obscure films (<5K votes)
+   - Root cause: **item uncertainty scales with vote count**
+     - <1K votes: uncertainty 0.52
+     - 100K+ votes: uncertainty 0.045 (10x lower)
+   - 73.8% of movies have <5K votes (extremely skewed distribution)
+   - Vote distribution is log-normal (median 1,558, mean 18,221)
+
+3. **Thompson Sampling Design Exploration**
+   - Pure Thompson: high-uncertainty movies dominate (worse than mean)
+   - Thompson + vote filter: good but excludes interesting obscure films
+   - Aggregated Thompson (1000 samples): more stable but still noisy
+   - P(rating ≥ 9): clean but no exploration
+
+4. **Final Approach: Squared Log-Vote Shrinkage + Soft IMDb Floor**
+   ```python
+   # Shrink uncertainty for low-vote movies
+   shrink = (log(votes) / log(50000))^2  # squared for steeper curve
+   effective_std = std * shrink
+
+   # Thompson sample
+   score = mean + effective_std * N(0,1)
+
+   # Penalize wild divergence from IMDb
+   penalty = max(0, pred_mean - imdb_rating - 3) * 0.5
+   final_score = score - penalty
+   ```
+
+5. **New Recommendation Script** - `scripts/recommend_irt.py`
+   - Thompson sampling with configurable parameters
+   - CLI flags: `--reference-votes`, `--imdb-tolerance`, `--imdb-penalty-weight`
+   - Produces balanced recommendations: ~0 <1K, ~19 1K-10K, ~10 10K-50K, ~1 >50K
+
+### Key Design Decisions
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Shrinkage curve | Squared | Linear too gentle (0.64 at 1K), squared gives 0.41 |
+| Reference votes | 50,000 | Full uncertainty trusted above this |
+| IMDb tolerance | 3.0 | User can like a movie 3 pts above IMDb consensus |
+| IMDb penalty weight | 0.5 | Halve excess divergence, don't eliminate |
+
+### Shrinkage Examples
+| Votes | Shrink Factor |
+|-------|---------------|
+| 100 | 0.18 |
+| 1,000 | 0.41 |
+| 5,000 | 0.62 |
+| 10,000 | 0.72 |
+| 50,000 | 1.00 |
+
+### Usage
+```bash
+# Default Thompson sampling
+PYTHONPATH=. python scripts/recommend_irt.py
+
+# With custom parameters
+PYTHONPATH=. python scripts/recommend_irt.py \
+  --top-n 30 \
+  --reference-votes 50000 \
+  --imdb-tolerance 3.0 \
+  --seed 42
+```
+
+### Files Created/Modified
+- `src/recommendation/` - new package for recommendation logic
+  - `__init__.py` - exports ThompsonConfig, generate_recommendations, etc.
+  - `thompson.py` - Thompson sampling with shrinkage and IMDb floor
+- `scripts/recommend_irt.py` - refactored to use recommendation package
+- `scripts/train_irt.py` - refactored to use recommendation package
+- `scripts/check_calibration.py` - created (model diagnostics)
+- `docs/compacting/compacting_summary.md` - updated
+
+### Next Steps
+1. Test recommendations in practice (watch some movies, provide feedback)
+2. Consider training longer (current model: 20 epochs) if calibration degrades
+3. Implement preference elicitation system (V3)
+
+---
+
 ## 2025-12-17 (Session 4): IRT Model & Preference Elicitation Design
 
 ### Current Status

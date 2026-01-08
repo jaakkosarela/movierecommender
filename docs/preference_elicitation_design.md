@@ -2,9 +2,10 @@
 
 ## Overview
 
-A system for gathering binary preference data ("Do you prefer A or B?") to:
-1. **Calibrate** existing ratings by refining user latent factors
-2. **Rate new movies** by placing them in the user's preference ordering
+A system for gathering binary preference data ("Do you prefer A or B?") with two user-facing modes:
+
+1. **Calibrate** - System asks about movies where model predictions differ from user ratings
+2. **Rate** - User rates a movie they watched (system handles MovieLens lookup internally)
 
 Pairwise comparisons are cognitively easier than absolute ratings and provide richer signal about relative preferences.
 
@@ -20,45 +21,53 @@ Pairwise comparisons are cognitively easier than absolute ratings and provide ri
 
 ## Use Cases
 
-### Use Case A: Calibration
+### Mode 1: Calibrate
 
-**Goal**: Refine user's latent factors θ using pairwise comparisons between already-rated movies.
+**Goal**: Refine user's latent factors θ by asking about movies where model predictions are surprising.
+
+**When to use**: Model predicts rating that differs significantly from user's actual rating.
 
 **Flow**:
 1. Load user's rated movies and current θ estimate
-2. Sample informative pairs (movies where model is uncertain about preference)
-3. User answers 15-20 comparisons per session
-4. Log all comparisons
-5. (Later) Update θ using logged comparisons
+2. Identify "surprising" movies: `|predicted - actual| > threshold`
+3. Sample pairs involving surprising movies (max entropy selection)
+4. User answers 15-20 comparisons per session
+5. Log all comparisons
+6. (Later) Update θ using logged comparisons
 
-**Information gain**: The most informative pairs are where P(A>B) ≈ 0.5, meaning the model is maximally uncertain.
+**Information gain**: The most informative pairs are where P(A>B) ≈ 0.5, meaning the model is maximally uncertain. Pairs involving surprising movies help determine if:
+- User's original rating was noisy, or
+- Model's θ estimate is wrong for this preference dimension
 
-### Use Case B: Rating a New Movie
+### Mode 2: Rate
 
-**Goal**: User has seen a new movie and wants to rate it. Use ~7 pairwise comparisons to estimate rating.
+**Goal**: User has watched a movie and wants to rate it. Use ~7 pairwise comparisons to estimate rating.
 
 **Flow**:
-1. User specifies movie (by title search or IMDb ID)
-2. System checks if movie exists (in MovieLens or IMDb)
-3. Sample anchor movies from user's rated set
-4. Binary search through preference space
-5. Convert final position to rating estimate
+```
+User enters: "Oppenheimer"
+    ↓
+Search IMDb (fuzzy match if needed)
+    ↓
+User confirms: "Oppenheimer (2023) tt15398776"
+    ↓
+System checks MovieLens internally
+    ├─ Found → use model prediction as starting point for binary search
+    └─ Not found → pure anchor-based binary search
+    ↓
+Binary comparison session (~7 questions)
+    ↓
+Rating saved to user_ratings.csv
+```
 
-**Key insight**: We don't need IRT item factors for the new movie. We can place it in the user's preference ordering using comparisons alone, then interpolate a rating.
+**Key insight**: The user doesn't need to know whether the movie is in MovieLens. The system adapts internally:
 
-### Handling Movies Not in MovieLens
+| Movie in MovieLens? | Strategy |
+|---------------------|----------|
+| Yes | Model predicts rating, binary search starts near prediction |
+| No | Pure binary search through anchors spanning rating range |
 
-If a movie is in IMDb but not MovieLens:
-- We lack trained item factors β_m
-- But we CAN still rate it via pairwise comparisons
-
-**Approach**:
-1. Select anchor movies spanning user's rating range (e.g., movies rated 4, 6, 8, 10)
-2. Binary search: "Do you prefer [new movie] or [anchor]?"
-3. Narrow down position in preference ordering
-4. Interpolate rating from neighboring anchors
-
-This works because we're using the user's own rated movies as a calibrated scale.
+**Anchor selection**: Select rated movies spanning user's rating range (e.g., movies rated 5, 7, 8, 9, 10). Binary search narrows down position, then interpolate rating from neighboring anchors.
 
 ## Data Schema
 
@@ -96,15 +105,16 @@ Append-only JSONL file: `data/pairwise_comparisons.jsonl`
 }
 ```
 
-For new movie rating sessions, additional fields:
+For rating sessions, additional fields:
 ```json
 {
-    "use_case": "new_movie",
+    "use_case": "rate",
     "target_movie": {
         "tconst": "tt15398776",
         "title": "Oppenheimer",
         "year": 2023,
-        "in_movielens": false
+        "in_movielens": false,
+        "model_prediction": null
     },
     "estimated_rating": 8.5,
     "confidence_interval": [8.0, 9.0]
@@ -196,15 +206,21 @@ Run `python scripts/update_factors.py` to update your θ.
 ═══════════════════════════════════════════════════════════════
 ```
 
-### New Movie Rating Mode
+### Rate Mode
 
 ```
 $ python scripts/elicit_preferences.py rate "Oppenheimer"
 
-Searching for "Oppenheimer"...
+Searching IMDb for "Oppenheimer"...
+
+  [1] Oppenheimer (2023) - Biography, Drama, History
+  [2] Oppenheimer (1980) - Biography, Drama, History
+  [3] The Trials of J. Robert Oppenheimer (2008) - Documentary
+
+Select movie [1-3]: 1
+
 Found: Oppenheimer (2023) [tt15398776]
        Biography, Drama, History
-       In MovieLens: No (will use comparison-based rating)
 
 ╔═══════════════════════════════════════════════════════════════╗
 ║                    RATE: Oppenheimer (2023)                    ║
@@ -217,12 +233,9 @@ Round 1 of ~7
 
   [A] Oppenheimer (2023)
       Biography, Drama, History
-      The story of the atomic bomb's development and its aftermath.
 
   [B] The Dark Knight (2008)
       Action, Crime, Drama
-      Batman faces the Joker, a criminal mastermind who seeks
-      to plunge Gotham into anarchy.
 ─────────────────────────────────────────────────────────────────
 
 Which do you prefer? [a/b]: a
@@ -238,6 +251,8 @@ Would you like to save this rating? [y/n]: y
 ✓ Comparison session logged (7 comparisons)
 ═══════════════════════════════════════════════════════════════
 ```
+
+Note: The system internally checks if the movie is in MovieLens. If yes, it uses the model prediction to start the binary search near the expected rating. If no, it does a full binary search through anchors. The user doesn't see this distinction.
 
 ## Movie Metadata
 
@@ -370,14 +385,55 @@ where y_i = 1 if user chose A, 0 if chose B
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| P1 | Data schema and logging utilities | Planned |
-| P2 | Movie metadata fetching/caching | Planned |
-| P3 | Sampling strategies (max_entropy, adaptive) | Planned |
-| P4 | CLI for calibration mode | Planned |
-| P5 | CLI for new movie rating mode | Planned |
-| P6 | Factor update from comparisons | Planned |
-| P7 | Analysis tools for logged data | Planned |
+| P1 | Data schema and logging utilities | **Done** |
+| P2 | IMDb search with fuzzy matching | **Done** |
+| P3 | MovieLens lookup (movie → model predictions) | Planned |
+| P4 | Sampling strategies (max_entropy, adaptive binary search) | **Done** |
+| P5 | CLI for calibrate mode | Planned |
+| P6 | CLI for rate mode (unified flow) | Planned |
+| P7 | Factor update from comparisons | Planned |
+| P8 | Analysis tools for logged data | Planned |
+
+## Implementation Details (P1, P2, P4)
+
+### Package Structure
+
+```
+src/elicitation/
+├── __init__.py          # Package exports
+├── schemas.py           # Movie, Comparison, Session, RatingEstimate
+├── logger.py            # ComparisonLogger (JSONL append-only)
+├── sampler.py           # MaxEntropySampler, AdaptiveBinarySearchSampler
+└── movie_search.py      # MovieSearcher (IMDb fuzzy search)
+```
+
+### Key Classes
+
+**Schemas:**
+- `Movie(tconst, title, year, genres, movielens_id, model_prediction)`
+- `Comparison(movie_a, movie_b, choice, session_id, model_prediction, ...)`
+- `Session(id, use_case, started_at, ended_at, comparisons, rating_estimate)`
+- `RatingEstimate(rating, confidence_low, confidence_high, n_comparisons)`
+
+**Logger:**
+- `ComparisonLogger.log_comparison(comparison)` → appends to `data/pairwise_comparisons.jsonl`
+- `ComparisonLogger.log_session(session)` → appends to `data/sessions.jsonl`
+
+**Samplers:**
+- `MaxEntropySampler(rated_movies, predicted_ratings)` → for calibration
+- `AdaptiveBinarySearchSampler(target_movie, anchor_movies, anchor_ratings)` → for rating
+
+**Search:**
+- `MovieSearcher.search(query, limit=10)` → fuzzy search IMDb
+- `MovieSearcher.get_by_tconst(tconst)` → lookup by ID
+- Returns `SearchResult(movie, score)` with MovieLens ID if available
+
+### Remaining Work
+
+- **P3**: Model interface to get predictions for user's rated movies and new movies
+- **P5**: CLI loop for calibrate mode (load model, sample pairs, prompt user)
+- **P6**: CLI loop for rate mode (search movie, binary search, save rating)
 
 ---
 
-*Design complete. Ready for implementation on user approval.*
+*Implementation in progress.*

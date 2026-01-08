@@ -2,7 +2,6 @@
 """Train IRT model on MovieLens data and generate recommendations."""
 
 import argparse
-import json
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +14,13 @@ from src.irt_model import (
     IRTTrainer,
     fit_new_user,
     initialize_with_svd,
+)
+from src.recommendation import (
+    ThompsonConfig,
+    compute_user_predictions,
+    add_imdb_metadata,
+    generate_recommendations,
+    print_recommendations,
 )
 
 
@@ -138,81 +144,48 @@ def main():
     print("Generating recommendations...")
     print("=" * 60)
 
-    model.eval()
-    with torch.no_grad():
-        # Get all items the user hasn't rated
-        rated_items = set(user_ratings_dict.keys())
-        candidate_items = [i for i in range(model.n_items) if i not in rated_items]
-        candidate_idx = torch.tensor(candidate_items, dtype=torch.long)
-
-        # Predict using user's fitted factors
-        item_factors = model.item_mu[candidate_idx]
-        item_biases = model.item_bias_mu[candidate_idx]
-
-        # Expected rating
-        pred_mean = (user_mu * item_factors).sum(dim=1)
-        pred_mean = pred_mean + user_bias + item_biases + model.global_mean
-
-        # Uncertainty (variance)
-        user_var = torch.exp(2 * user_log_std)
-        item_var = torch.exp(2 * model.item_log_std[candidate_idx])
-
-        pred_var = (user_var * item_var).sum(dim=1)
-        pred_var = pred_var + (user_var * item_factors**2).sum(dim=1)
-        pred_var = pred_var + (user_mu**2 * item_var).sum(dim=1)
-        pred_var = pred_var + model.noise_std**2
-
-        pred_std = torch.sqrt(pred_var)
-
-        # Sort by expected rating
-        sorted_idx = torch.argsort(pred_mean, descending=True)
-
-    # Get movie metadata
+    # Load IMDb metadata
     print("\nLoading IMDb metadata for enrichment...")
     data.load_imdb_metadata()
 
-    # Create lookup for movie info
+    imdb_df = data.imdb_ratings.set_index("tconst")
     movies_df = data.movies.set_index("movieId")
-    imdb_ratings_df = data.imdb_ratings.set_index("tconst") if data.imdb_ratings is not None else None
 
-    print(f"\nTop {args.top_n} Recommendations:")
-    print("-" * 100)
-    print(f"{'Rank':<5} {'Title':<45} {'Pred':>6} {'±Std':>6} {'IMDb':>6} {'Votes':>10}")
-    print("-" * 100)
+    # Compute predictions using recommendation module
+    predictions = compute_user_predictions(
+        model=model,
+        user_mu=user_mu,
+        user_log_std=user_log_std,
+        user_bias=user_bias,
+        rated_items=set(user_ratings_dict.keys()),
+        movie_idx_to_id=movie_idx_to_id,
+        imdb_df=imdb_df,
+    )
 
-    shown = 0
-    for rank_idx in sorted_idx:
-        if shown >= args.top_n:
-            break
+    # Add IMDb metadata
+    add_imdb_metadata(
+        predictions=predictions,
+        movie_idx_to_id=movie_idx_to_id,
+        movieid_to_tconst=data.movieid_to_tconst,
+        imdb_df=imdb_df,
+    )
 
-        item_idx = candidate_items[rank_idx]
-        movie_id = movie_idx_to_id[item_idx]
-        pred = pred_mean[rank_idx].item()
-        std = pred_std[rank_idx].item()
+    # Use Thompson sampling for recommendations
+    thompson_config = ThompsonConfig(
+        reference_votes=50000,
+        imdb_tolerance=3.0,
+        imdb_penalty_weight=0.5,
+    )
 
-        # Get movie info
-        if movie_id in movies_df.index:
-            title = movies_df.loc[movie_id, "title"]
-        else:
-            title = f"Movie {movie_id}"
+    recommendations = generate_recommendations(
+        predictions=predictions,
+        config=thompson_config,
+        movie_idx_to_id=movie_idx_to_id,
+        movies_df=movies_df,
+        top_n=args.top_n,
+    )
 
-        # Get IMDb info if available
-        imdb_rating = ""
-        imdb_votes = ""
-        if data.movieid_to_tconst and movie_id in data.movieid_to_tconst:
-            tconst = data.movieid_to_tconst[movie_id]
-            if imdb_ratings_df is not None and tconst in imdb_ratings_df.index:
-                imdb_rating = f"{imdb_ratings_df.loc[tconst, 'averageRating']:.1f}"
-                imdb_votes = f"{imdb_ratings_df.loc[tconst, 'numVotes']:,}"
-
-        # Truncate title
-        if len(title) > 43:
-            title = title[:40] + "..."
-
-        shown += 1
-        print(f"{shown:<5} {title:<45} {pred:>6.2f} {std:>6.2f} {imdb_rating:>6} {imdb_votes:>10}")
-
-    print("-" * 100)
+    print_recommendations(recommendations, show_details=True)
 
     # Show user's rated movies for context
     print(f"\n\nUser's highest rated movies (for context):")

@@ -157,6 +157,21 @@ When context is running low or before user compacts:
 
 After compacting, check `docs/compacting/compacting_summary.md` for where we left off.
 
+## Commit & PR Guidelines
+
+- Always let the user commit
+- Use Conventional Commits: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`
+
+### Commit Message Format
+
+When asked to summarize for a commit, provide:
+
+1. **Broader summary**: Prose description of what was accomplished
+2. **Concise commit message**: Ready-to-use format with:
+   - Headline: `type: Short description` (e.g., `feat: Information-seeking experiment`)
+   - Maximum 6 bullet points summarizing key changes
+   - Reference specific docs where applicable (`docs/plans/`, `docs/analysis/`)
+
 ## Key Design Decisions
 
 ### V1: Pearson-based Collaborative Filtering
@@ -172,22 +187,8 @@ After compacting, check `docs/compacting/compacting_summary.md` for where we lef
 4. **SVD initialization** - Warm start for faster convergence
 5. **Uncertainty quantification** - Predictions include confidence intervals
 
-### Preference Elicitation (Designed, Not Implemented)
+### Preference Elicitation
 1. **Binary comparisons** - "Do you prefer A or B?" easier than absolute ratings
 2. **Max entropy sampling** - Select pairs where model is most uncertain
 3. **Versioned logging** - All comparisons saved for experimentation
 4. **IMDb-only movies supported** - Via comparison-based rating against anchors
-
-## Implementation Roadmap
-
-| Phase | Description | Status |
-|-------|-------------|--------|
-| **V1** | Pearson-based collaborative filtering | Done |
-| **V2** | IRT model with variational inference | Done |
-| **V2.1** | Train production model (20 epochs) | Next |
-| **V3** | Preference elicitation system | Designed |
-| **V3.1** | Data schema and logging utilities | Planned |
-| **V3.2** | Sampling strategies (max_entropy, adaptive) | Planned |
-| **V3.3** | CLI for calibration mode | Planned |
-| **V3.4** | CLI for new movie rating mode | Planned |
-| **V3.5** | Factor update from comparisons | Planned |

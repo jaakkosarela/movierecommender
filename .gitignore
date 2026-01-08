@@ -5,10 +5,11 @@ data/*.tsv
 data/*.tsv.gz
 data/movie_cache.json
 
-# Keep user ratings and pairwise comparisons
+# Keep user ratings (but not elicitation logs - user-specific)
 !data/user_ratings.csv
-!data/pairwise_comparisons.jsonl
-!data/sessions.jsonl
+data/pairwise_comparisons.jsonl
+data/sessions.jsonl
+data/rating_events.jsonl
 
 # Models (large binary files)
 models/*.pt

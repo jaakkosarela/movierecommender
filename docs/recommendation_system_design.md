@@ -18,7 +18,7 @@ A collaborative filtering recommendation system that uses MovieLens 25M user rat
 - **name.basics.tsv**: Actor/director names
 
 ### User Data
-- **user_ratings.csv**: 35 rated movies with IMDb IDs (tconst)
+- **user_ratings.csv**: 82 rated movies with IMDb IDs (70 map to MovieLens)
 
 ## Algorithm: User-Based Collaborative Filtering
 
@@ -113,14 +113,19 @@ Rank | Title | Predicted | IMDb | Year | Genres | Director
 ```
 src/
 ├── __init__.py
-├── data_loader.py      # Load and join MovieLens + IMDb data
-├── similarity.py       # User similarity calculations
-├── recommender.py      # Core recommendation engine
-└── cli.py              # Command-line interface
+├── data_loader.py           # Load and join MovieLens + IMDb data
+├── similarity.py            # User similarity calculations (V1)
+├── recommender.py           # Pearson-based recommendation engine (V1)
+├── irt_model.py             # IRT latent factor model with VI (V2)
+└── recommendation/          # Recommendation generation
+    ├── __init__.py
+    └── thompson.py          # Thompson sampling with shrinkage
 
 scripts/
-├── build_user_index.py # Precompute user similarity matrix
-└── recommend.py        # Generate recommendations for user
+├── recommend.py             # V1 Pearson-based recommendations
+├── recommend_irt.py         # V2 IRT + Thompson sampling recommendations
+├── train_irt.py             # Train IRT model
+└── check_calibration.py     # Model diagnostics
 ```
 
 ## Performance Considerations
@@ -280,13 +285,31 @@ The variance provides confidence intervals—recommend movies with high expected
 | V2.2 | Add variational inference with stochastic updates | Done |
 | V2.3 | Non-symmetric priors for identifiability | Done |
 | V2.4 | Uncertainty-aware recommendations | Done |
-| V2.5 | Model diagnostics and validation | In Progress |
-| V2.6 | Compare V1 vs V2 on held-out ratings | Planned |
+| V2.5 | Model diagnostics and validation | Done |
+| V2.6 | Thompson sampling with shrinkage | Done |
+| V2.7 | Compare V1 vs V2 on held-out ratings | Planned |
 
 ### V2 Model Diagnostics
 
+**Calibration Results (on 70 user ratings):**
+- MAE: 0.58 (much better than V1's 1.18)
+- RMSE: 0.76
+- Correlation: 0.55
+- Prediction range: [7.5, 9.4] (valid)
+- User bias learned: +4.92 (correctly captures user's high ratings)
+
+**Root Cause of Initial Bad Recommendations:**
+Raw mean ranking was dominated by obscure films because item uncertainty scales inversely with vote count:
+- <1K votes: uncertainty ~0.52
+- 100K+ votes: uncertainty ~0.045 (10x lower)
+
+The vote count distribution is extremely skewed (log-normal):
+- Median: 1,558 votes
+- Mean: 18,221 votes
+- 73.8% of movies have <5K votes
+
 After initial training (20 epochs, K=20), recommendations showed red flags:
-- All predictions > 10 (outside valid 1-10 range)
+- All predictions > 10 (outside valid 1-10 range) — **turned out to be Thompson sampling issue, not model**
 - Dominated by obscure films (<5K votes)
 - Some low IMDb scores (4.1, 4.8) predicted as 10+
 - High uncertainty (±1.3 to ±2.0) across all predictions
@@ -363,6 +386,110 @@ MovieLens uses 0.5-5.0 scale, user ratings are 1-10.
 | ELBO not converged | More epochs, adjust learning rate |
 | Item factors exploding | Stronger regularization (tighter priors) |
 
+### V2.6: Thompson Sampling with Uncertainty Shrinkage
+
+Pure Thompson sampling doesn't work well because high-uncertainty items (rare movies) dominate. The solution combines two techniques:
+
+#### Squared Log-Vote Shrinkage
+
+Shrink the posterior uncertainty for low-vote movies, treating their high variance as noise rather than signal:
+
+```python
+shrink_factor = (log(votes) / log(reference_votes))²
+effective_std = pred_std * shrink_factor
+```
+
+| Votes | Shrink Factor |
+|-------|---------------|
+| 100 | 0.18 |
+| 1,000 | 0.41 |
+| 5,000 | 0.62 |
+| 10,000 | 0.72 |
+| 50,000+ | 1.00 |
+
+The squared curve is more aggressive than linear, preventing low-vote movies from dominating through noise.
+
+#### Soft IMDb Floor
+
+Penalize predictions that diverge wildly from IMDb consensus:
+
+```python
+divergence = pred_mean - imdb_rating
+penalty = max(0, divergence - tolerance) * penalty_weight
+final_score = thompson_score - penalty
+```
+
+Default parameters:
+- `reference_votes = 50,000` — full uncertainty trusted above this
+- `tolerance = 3.0` — allow user to like movies up to 3 points above IMDb
+- `penalty_weight = 0.5` — halve excess divergence
+
+#### Final Algorithm
+
+```python
+# 1. Compute predictions
+pred_mean, pred_std = model.predict(user, candidates)
+
+# 2. Apply squared log-vote shrinkage
+shrink = (log(votes) / log(50000))²
+effective_std = pred_std * clip(shrink, 0, 1)
+
+# 3. Thompson sample
+score = pred_mean + effective_std * N(0, 1)
+
+# 4. Apply soft IMDb floor
+penalty = max(0, pred_mean - imdb_rating - 3) * 0.5
+final_score = score - penalty
+
+# 5. Rank by final_score
+```
+
+**Results:**
+- Vote distribution in top 30: ~0 <1K, ~19 1K-10K, ~10 10K-50K, ~1 >50K
+- Balances exploration (some obscure films) with quality (IMDb floor)
+- Stable across different random seeds
+
+### Selection Bias in Movie Ratings
+
+**The problem:** MovieLens ratings are not from random movie-watching. People choose movies they expect to like.
+
+| Movie Type | Who watches? | Rating distribution |
+|------------|--------------|---------------------|
+| Rare/niche | People who actively sought it out | Skewed positive (selection bias) |
+| Popular | Broader audience (social, availability) | More representative |
+
+For a movie with 500 ratings, those 500 people *chose* it - probably matched their niche taste. The ratings encode "people who self-select into this movie love it." This corrupts learned item factors β for rare movies.
+
+**Current mitigation (heuristic):**
+- Squared shrinkage reduces influence of biased factors
+- Soft IMDb floor uses broader-audience ratings as correction
+
+**Bayesian approach (future consideration):**
+
+The principled fix is a vote-count-dependent prior on item factors:
+
+```
+β_m ~ N(μ_prior(m), σ_prior(m)²)
+
+where:
+  σ_prior(m) = σ_base / sqrt(votes_m / votes_reference)
+```
+
+For rare movies, σ_prior is large → posterior shrinks toward μ_prior.
+For popular movies, σ_prior is small → data dominates.
+
+The prior mean μ_prior could be:
+- Zero (current approach)
+- IMDb rating (external signal)
+- Genre-based average
+
+This would naturally produce smaller effective uncertainty for rare movies without post-hoc shrinkage.
+
+**Why we're not implementing this now:**
+- Current heuristic works well in practice
+- Would require retraining the model
+- The shrinkage + IMDb floor achieves similar effect
+
 ## Success Metrics
 
 ### V1 (Pearson-based)
@@ -394,7 +521,8 @@ tqdm>=4.65.0
 3. [x] Implement recommender.py - prediction engine (V1)
 4. [x] Implement irt_model.py - IRT with VI (V2)
 5. [x] Build CLI for generating recommendations
-6. [ ] **Run model diagnostics on trained model**
-7. [ ] Fix any issues revealed by diagnostics
+6. [x] Run model diagnostics on trained model
+7. [x] Fix issues revealed by diagnostics (Thompson sampling with shrinkage)
 8. [ ] Compare V1 vs V2 predictions
-9. [ ] Implement preference elicitation system (V3)
+9. [ ] Test recommendations in practice (watch movies, provide feedback)
+10. [ ] Implement preference elicitation system (V3)
