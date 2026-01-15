@@ -23,7 +23,7 @@ def main():
         description="Generate recommendations from trained IRT model"
     )
     parser.add_argument(
-        "--model", type=str, default="models/irt_v1.pt", help="Path to trained model"
+        "--model", type=str, default="models/irt_v2_k50.pt", help="Path to trained model"
     )
     parser.add_argument(
         "--user-checkpoint",
@@ -226,13 +226,35 @@ def main():
                     year = movie_data.get("year")
                     new_rating = rating_estimates.get(tconst)
                     if new_rating:
+                        pred_scaled = None
+                        std_scaled = None
+                        type_label = "[new]"
+
+                        # Check if movie is in MovieLens - if so, get prediction
+                        movie_id = data.tconst_to_movieid.get(tconst)
+                        if movie_id and movie_id in movie_id_to_idx:
+                            item_idx = movie_id_to_idx[movie_id]
+                            with torch.no_grad():
+                                item_mu = model.item_mu[item_idx]
+                                item_var = torch.exp(2 * model.item_log_std[item_idx])
+
+                                pred = (user_mu * item_mu).sum() + user_bias + model.item_bias_mu[item_idx] + model.global_mean
+                                pred_scaled = (pred.item() - 0.5) / 4.5 * 9 + 1
+
+                                var_rating = (user_var * item_var).sum()
+                                var_rating = var_rating + (user_var * item_mu**2).sum()
+                                var_rating = var_rating + (user_mu**2 * item_var).sum()
+                                std_scaled = (torch.sqrt(var_rating).item()) / 4.5 * 9
+
+                            type_label = "[new]"  # Still mark as new (not in original ratings)
+
                         all_items[tconst] = {
                             "title": f"{title} ({year or '?'})",
-                            "predicted": None,
-                            "uncertainty": None,
+                            "predicted": pred_scaled,
+                            "uncertainty": std_scaled,
                             "orig_rating": None,
                             "new_rating": new_rating,
-                            "type": "[new]",
+                            "type": type_label,
                         }
 
         # Sort by best available rating: pred > new > orig

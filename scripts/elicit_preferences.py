@@ -8,7 +8,10 @@ Two modes:
 
 import argparse
 from datetime import datetime
+from pathlib import Path
 import sys
+
+import torch
 
 from src.elicitation import (
     Movie,
@@ -22,6 +25,8 @@ from src.elicitation import (
     ComparisonLogger,
     MaxEntropySampler,
     AdaptiveBinarySearchSampler,
+    DiscrepancySampler,
+    FactorUncertaintySampler,
     MovieSearcher,
     ModelInterface,
 )
@@ -83,9 +88,15 @@ def get_choice() -> ComparisonChoice | str | None:
 
 def run_calibrate(args: argparse.Namespace) -> None:
     """Run calibration mode."""
+    strategy_map = {
+        "entropy": "max_entropy",
+        "discrepancy": "discrepancy",
+        "uncertainty": "factor_uncertainty",
+    }
+    strategy_name = strategy_map.get(args.strategy, args.strategy)
     print_header(
         "PREFERENCE CALIBRATION",
-        f"Model: {args.model} | Strategy: max_entropy | Rounds: {args.n_rounds}"
+        f"Model: {args.model} | Strategy: {strategy_name} | Rounds: {args.n_rounds}"
     )
 
     # Initialize components
@@ -130,10 +141,19 @@ def run_calibrate(args: argparse.Namespace) -> None:
     if target_items:
         print(f"Including {len(target_items)} rated series as calibration targets")
 
-    # Load previously shown pairs to exclude
-    existing_comparisons = logger.load_comparisons()
+    # Only exclude pairs that haven't been used for factor updates yet
+    # (pairs before the watermark have been incorporated - could be asked again)
+    user_checkpoint_path = Path("models/user_theta.pt")
+    if user_checkpoint_path.exists():
+        user_ckpt = torch.load(user_checkpoint_path, map_location="cpu", weights_only=False)
+        watermark = user_ckpt.get("comparisons_watermark", 0)
+    else:
+        watermark = 0
+
+    # Get only comparisons after the watermark (not yet incorporated)
+    unprocessed_comparisons = logger.get_comparisons_after(watermark)
     exclude_pairs = set()
-    for comp in existing_comparisons:
+    for comp in unprocessed_comparisons:
         tc_a = comp.get("movie_a", {}).get("tconst")
         tc_b = comp.get("movie_b", {}).get("tconst")
         if tc_a and tc_b:
@@ -141,23 +161,66 @@ def run_calibrate(args: argparse.Namespace) -> None:
             exclude_pairs.add((tc_b, tc_a))  # both directions
 
     if exclude_pairs:
-        print(f"Excluding {len(exclude_pairs) // 2} previously shown pairs")
+        print(f"Excluding {len(exclude_pairs) // 2} unprocessed pairs (run update_factors to incorporate)")
 
-    # Initialize sampler
-    sampler = MaxEntropySampler(
-        rated_movies=rated_movies,
-        predicted_ratings=predicted_ratings,
-        exclude_pairs=exclude_pairs,
-        target_items=target_items,
-        target_ratings=target_ratings,
-    )
+    # Initialize sampler based on strategy
+    if args.strategy == "discrepancy":
+        # For discrepancy mode, we need actual ratings
+        actual_ratings = {}
+        for tconst in predictions:
+            rating = model.get_user_rating(tconst)
+            if rating is not None:
+                actual_ratings[tconst] = rating
+
+        sampler = DiscrepancySampler(
+            rated_movies=rated_movies,
+            predicted_ratings=predicted_ratings,
+            actual_ratings=actual_ratings,
+            exclude_pairs=exclude_pairs,
+            min_discrepancy=1.0,  # Items with |pred - actual| >= 1.0
+        )
+        print(f"Discrepancy mode: targeting items where model is confidently wrong")
+
+    elif args.strategy == "uncertainty":
+        # Factor uncertainty mode - needs model internals
+        actual_ratings = {}
+        for tconst in predictions:
+            rating = model.get_user_rating(tconst)
+            if rating is not None:
+                actual_ratings[tconst] = rating
+
+        # Access model internals for factor-based sampling
+        irt_model = model._model
+        user_mu, user_log_std, user_bias = model._user_factors
+
+        sampler = FactorUncertaintySampler(
+            rated_movies=rated_movies,
+            predicted_ratings=predicted_ratings,
+            actual_ratings=actual_ratings,
+            item_mu=irt_model.item_mu,
+            tconst_to_idx=model._tconst_to_item_idx,
+            user_log_std=user_log_std,
+            prior_scales=irt_model.prior_scales,
+            exclude_pairs=exclude_pairs,
+        )
+        print(f"Factor uncertainty mode: targeting pairs that reduce θ uncertainty")
+
+    else:
+        # Default: max entropy
+        sampler = MaxEntropySampler(
+            rated_movies=rated_movies,
+            predicted_ratings=predicted_ratings,
+            exclude_pairs=exclude_pairs,
+            target_items=target_items,
+            target_ratings=target_ratings,
+        )
 
     # Create session
     session = Session(
         use_case="calibrate",
         started_at=datetime.now(),
         model_version=model_info.version,
-        sampling_strategy="max_entropy",
+        sampling_strategy=strategy_name,
     )
 
     print(f"\nSession: {session.id}")
@@ -222,7 +285,7 @@ def run_calibrate(args: argparse.Namespace) -> None:
             ),
             user_ratings=UserRatings(rating_a=rating_a, rating_b=rating_b),
             sampling=SamplingInfo(
-                strategy="max_entropy",
+                strategy=strategy_name,
                 entropy=pair.prediction.entropy,
             ),
         )
@@ -547,7 +610,7 @@ def main():
     parser = argparse.ArgumentParser(description="Preference elicitation CLI")
     parser.add_argument(
         "--model",
-        default="models/irt_v1.pt",
+        default="models/irt_v2_k50.pt",
         help="Path to trained model",
     )
     subparsers = parser.add_subparsers(dest="command", help="Mode")
@@ -559,6 +622,12 @@ def main():
         type=int,
         default=20,
         help="Number of comparisons (default: 20)",
+    )
+    cal_parser.add_argument(
+        "--strategy",
+        choices=["entropy", "discrepancy", "uncertainty"],
+        default="entropy",
+        help="Sampling strategy: entropy (model uncertain), discrepancy (model wrong), or uncertainty (reduce θ variance)",
     )
 
     # Rate subcommand

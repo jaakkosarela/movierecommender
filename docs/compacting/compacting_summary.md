@@ -4,6 +4,224 @@ Reverse chronological order (newest first).
 
 ---
 
+## 2026-01-15 (Session 13): Factor Uncertainty Sampler & Analysis Tools
+
+### Current Status
+Implemented new `FactorUncertaintySampler` calibration strategy that targets pairs which maximally reduce θ uncertainty. Created analysis tools for exploring factor structure.
+
+### Completed Work
+
+1. **FactorUncertaintySampler** (`src/elicitation/sampler.py`):
+   - New calibration strategy: `--strategy uncertainty`
+   - Scores pairs by: `Σ θ_var[k] * (β_A[k] - β_B[k])² * prior_scale[k]²`
+   - Weighted by entropy to prefer uncertain outcomes (avoid lopsided pairs)
+   - `entropy_weight` parameter (default 1.0) controls entropy influence
+   - Finds pairs that probe dimensions where θ is uncertain
+
+2. **CLI Integration** (`scripts/elicit_preferences.py`):
+   - Added `--strategy uncertainty` option
+   - Three strategies now available: `entropy`, `discrepancy`, `uncertainty`
+
+3. **Factor Analysis Script** (`scripts/analyze_factors.py`):
+   - Shows top/bottom movies for each factor
+   - `--n-factors 20` number of factors to show
+   - `--n-movies 5` movies per factor (top and bottom)
+   - `--min-votes 10000` filter by IMDb votes
+   - `--user-only` only show user's rated movies
+
+4. **Similar Movies Script** (`scripts/similar_movies.py`):
+   - Find movies similar in factor space
+   - Interactive movie selection (same as rate mode)
+   - Cosine or Euclidean similarity
+   - Shows factor profile of target movie
+
+5. **Era Correlation Analysis**:
+   - Factor 4 (prior=0.92) correlates with year (r=-0.11): older movies load higher
+   - Factor 0, 34, 1 also have weak era correlations
+   - Correlations weak (|r|<0.12) - factors capture taste more than era
+
+### Key Findings
+
+**Marriage Story as "Hub"**: Marriage Story appears in many top uncertainty pairs because:
+- High loading on Factor 2 (β=+0.998)
+- Comparisons involving it cause large θ swings (9.3 ↔ 7.7)
+- But variance doesn't drop - different comparisons pull θ opposite directions
+
+**Factor 2 Analysis** (Marriage Story vs A Late Quartet):
+- Factor 2 contributes 0.60 of 1.41 total info score (43%)
+- Direction difference |dir|=1.58 on this factor
+- θ uncertainty std=0.51 on Factor 2
+
+### Commands
+
+```bash
+# Three calibration strategies
+PYTHONPATH=. python scripts/elicit_preferences.py calibrate --strategy entropy
+PYTHONPATH=. python scripts/elicit_preferences.py calibrate --strategy discrepancy
+PYTHONPATH=. python scripts/elicit_preferences.py calibrate --strategy uncertainty
+
+# Analyze factors
+PYTHONPATH=. python scripts/analyze_factors.py --n-factors 10 --min-votes 50000
+
+# Find similar movies
+PYTHONPATH=. python scripts/similar_movies.py "Heat" --year 1995 --n 20
+```
+
+### Files Created/Modified
+- `src/elicitation/sampler.py` - Added FactorUncertaintySampler
+- `src/elicitation/__init__.py` - Export FactorUncertaintySampler
+- `scripts/elicit_preferences.py` - Added --strategy uncertainty
+- `scripts/analyze_factors.py` - New script
+- `scripts/similar_movies.py` - New script
+
+### Strategy Comparison
+
+| Strategy | What it targets | Best for |
+|----------|----------------|----------|
+| `entropy` | P(A>B) ≈ 0.5 | General exploration |
+| `discrepancy` | High \|pred - actual\| | Fixing known errors |
+| `uncertainty` | High θ variance along direction | Reducing factor uncertainty |
+
+### Open Issues
+- Marriage Story oscillates wildly but variance doesn't drop
+- May need hybrid approaches or per-item residuals
+- Factor uncertainty strategy may over-sample "hub" movies
+
+---
+
+## 2026-01-15 (Session 12): K=50 Model & Diagnostic Analysis
+
+### Current Status
+Trained new IRT model with K=50 factors (was K=20) to capture finer taste distinctions. Deep analysis of why Princess Bride prediction wasn't moving despite 53 comparison losses.
+
+### Completed Work
+
+1. **K=50 Model Training** (`scripts/train_irt.py`):
+   - Added `--prior-scale-end` argument for stronger regularization
+   - Trained with `--n-factors 50 --prior-scale-end 0.02`
+   - Saved to `models/irt_v2_k50.pt`
+
+2. **Updated Ratings Override Fix** (`scripts/update_factors.py`):
+   - Fixed bug: elicitation ratings now override original IMDb ratings (was double-counting)
+   - Added dimension mismatch detection: if checkpoint K≠model K, starts fresh
+   - Loads ALL comparisons when starting fresh (not just after watermark)
+
+3. **Prediction Fix for New Ratings** (`scripts/recommend_irt.py`):
+   - Fixed: movies rated via comparisons (e.g., Nightmare on Elm Street) now show predictions if in MovieLens
+   - Was showing `[new]` with no prediction even for MovieLens items
+
+4. **Smarter Pair Exclusion** (`scripts/elicit_preferences.py`):
+   - Changed: only exclude pairs NOT YET incorporated into model (after watermark)
+   - Old pairs (before watermark) can be asked again after factor update
+   - Allows re-evaluating pairs that might still be high-discrepancy
+
+5. **Duplicate Pair Fix** (`src/elicitation/sampler.py`):
+   - Fixed: DiscrepancySampler was generating (A,B) and (B,A) if both were high-discrepancy targets
+   - Added `seen_pairs` set to prevent duplicates
+
+### Deep Analysis: Why Princess Bride Stuck at 9.2
+
+**Key Finding**: The 53 losses pull θ in different directions that partially cancel out.
+
+- Factor 8: PB=+0.277, gradient says go negative, but θ[8]=+0.059 (wrong direction!)
+- 38 movies you like also have positive β[8], pulling θ[8] positive
+- The 20 (now 50) factors don't cleanly separate "PB-like" from "movies you prefer over PB"
+
+**Results with K=50**:
+- The Irishman: 8.5 → 6.1 (huge improvement!)
+- Princess Bride: 9.3 → 9.2 (minimal change - item_bias=0.80 baked in)
+
+**Root Cause**: Princess Bride's high item_bias (0.80) means "universally loved" - θ can only push so hard against that.
+
+### Factor Analysis Tool
+Explored which factors distinguish Heat from Collateral:
+- Factor 34, 39, 15: Heat higher
+- Factor 7, 21, 40, 43: Collateral higher
+- Factors capture unexpected dimensions (not "crime thriller style")
+
+### Commands
+```bash
+# Train K=50 model
+python scripts/train_irt.py --n-factors 50 --prior-scale-end 0.02 --n-epochs 25 --save-model models/irt_v2_k50.pt
+
+# Update factors (detects K mismatch, starts fresh)
+PYTHONPATH=. python scripts/update_factors.py --model models/irt_v2_k50.pt --force
+
+# Calibrate with discrepancy strategy
+PYTHONPATH=. python scripts/elicit_preferences.py calibrate --strategy discrepancy
+```
+
+### Files Modified
+- `scripts/train_irt.py` - added `--prior-scale-end`
+- `scripts/update_factors.py` - rating override fix, dimension check
+- `scripts/recommend_irt.py` - prediction for comparison-rated MovieLens items
+- `scripts/elicit_preferences.py` - watermark-based pair exclusion
+- `src/elicitation/sampler.py` - duplicate pair fix
+- Default model path changed to `models/irt_v2_k50.pt`
+
+### Open Issues
+- Princess Bride still at 9.2 (item_bias problem)
+- Options: higher comparison weight, per-item residuals, or accept it
+
+---
+
+## 2026-01-14 (Session 11): Discrepancy-Based Calibration Strategy
+
+### Current Status
+Added new calibration strategy that targets "confidently wrong" predictions instead of uncertain ones.
+
+### Completed Work
+
+1. **DiscrepancySampler** (`src/elicitation/sampler.py`):
+   - New sampler that finds items with high |pred - actual|
+   - Pairs high-discrepancy items against anchors where anchor_pred ≈ actual_target
+   - Maximizes expected information gain (model surprise)
+   - Scores by belief_divergence: |P(A>B)_model - P(A>B)_actual|
+
+2. **Calibrate Strategy Option** (`scripts/elicit_preferences.py`):
+   - Added `--strategy` flag: `entropy` (default) or `discrepancy`
+   - `entropy`: P(A>B) ≈ 0.5 (model uncertain)
+   - `discrepancy`: model confident but wrong
+
+3. **Key Insight from Discussion**:
+   - Max entropy (P(A>B) ≈ 0.5) doesn't maximize information gain
+   - When items are genuinely similar, comparisons measure noise
+   - Better: compare high-discrepancy item vs anchor near actual rating
+   - Model predicts one outcome confidently, user likely contradicts → big update
+
+### Example Output
+```
+Top discrepancies (pred - actual):
+  The Irishman           pred=8.8 actual=6.0 disc=+2.8
+  The Princess Bride     pred=9.3 actual=7.0 disc=+2.3
+
+Top pairs by expected information:
+  1. The Irishman vs Conan the Barbarian
+     Target: pred=8.8 actual=6.0
+     Anchor: pred=7.1 actual=8.0
+     P(target wins): model=0.85, divergence=0.73
+```
+
+### Usage
+```bash
+# Traditional max-entropy calibration
+PYTHONPATH=. python scripts/elicit_preferences.py calibrate --n-rounds 20
+
+# Discrepancy-based calibration (targets model mistakes)
+PYTHONPATH=. python scripts/elicit_preferences.py calibrate --strategy discrepancy --n-rounds 20
+```
+
+### Key Files Modified
+- `src/elicitation/sampler.py` - Added DiscrepancySampler class
+- `src/elicitation/__init__.py` - Export DiscrepancySampler
+- `scripts/elicit_preferences.py` - Added --strategy option
+
+### Pending
+- Commit changes
+- Consider hybrid: N entropy + M discrepancy rounds
+
+---
+
 ## 2026-01-08 (Session 10): Anchor Improvements & Prediction Tracking
 
 ### Current Status

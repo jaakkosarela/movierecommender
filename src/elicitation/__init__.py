@@ -14,6 +14,8 @@ from .logger import ComparisonLogger
 from .sampler import (
     MaxEntropySampler,
     AdaptiveBinarySearchSampler,
+    DiscrepancySampler,
+    FactorUncertaintySampler,
 )
 from .movie_search import MovieSearcher, SearchResult
 from .model_interface import ModelInterface, ModelInfo
@@ -30,6 +32,8 @@ __all__ = [
     "ComparisonLogger",
     "MaxEntropySampler",
     "AdaptiveBinarySearchSampler",
+    "DiscrepancySampler",
+    "FactorUncertaintySampler",
     "MovieSearcher",
     "SearchResult",
     "ModelInterface",

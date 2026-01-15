@@ -35,6 +35,12 @@ def main():
     parser.add_argument("--batch-size", type=int, default=10000, help="Mini-batch size")
     parser.add_argument("--lr", type=float, default=0.01, help="Learning rate")
     parser.add_argument(
+        "--prior-scale-end",
+        type=float,
+        default=0.1,
+        help="Prior scale for last factor (default: 0.1, use 0.02 for K=50)",
+    )
+    parser.add_argument(
         "--no-svd-init", action="store_true", help="Skip SVD initialization"
     )
     parser.add_argument(
@@ -72,6 +78,7 @@ def main():
             n_epochs=args.n_epochs,
             batch_size=args.batch_size,
             learning_rate=args.lr,
+            prior_scale_end=args.prior_scale_end,
         )
 
         # Create model

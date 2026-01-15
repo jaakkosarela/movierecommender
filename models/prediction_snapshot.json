@@ -1,290 +1,290 @@
 {
-  "timestamp": "2026-01-08T21:31:51.769654",
+  "timestamp": "2026-01-15T03:01:37.081693",
   "metadata": {
-    "n_comparisons": 315,
+    "n_comparisons": 1116,
     "n_ratings": 70,
-    "user_bias": 0.7326781749725342
+    "user_bias": 0.7270132303237915
   },
   "predictions": {
     "tt7653254": {
-      "pred": 7.97,
-      "uncertainty": 2.49
+      "pred": 8.01,
+      "uncertainty": 4.41
     },
     "tt0088258": {
-      "pred": 8.67,
-      "uncertainty": 0.52
+      "pred": 9.13,
+      "uncertainty": 0.51
     },
     "tt0098635": {
-      "pred": 8.86,
-      "uncertainty": 0.46
+      "pred": 8.85,
+      "uncertainty": 0.43
     },
     "tt1226240": {
-      "pred": 9.4,
-      "uncertainty": 1.07
+      "pred": 10.09,
+      "uncertainty": 2.16
     },
     "tt0190590": {
-      "pred": 8.7,
-      "uncertainty": 0.44
+      "pred": 9.03,
+      "uncertainty": 0.4
     },
     "tt0118715": {
-      "pred": 8.75,
-      "uncertainty": 0.61
-    },
-    "tt0112384": {
-      "pred": 8.76,
-      "uncertainty": 0.35
-    },
-    "tt0082198": {
-      "pred": 7.43,
-      "uncertainty": 0.72
-    },
-    "tt0100802": {
-      "pred": 8.53,
-      "uncertainty": 0.46
-    },
-    "tt0103772": {
-      "pred": 8.45,
-      "uncertainty": 0.54
-    },
-    "tt0061722": {
-      "pred": 8.96,
-      "uncertainty": 0.48
-    },
-    "tt0107614": {
-      "pred": 8.35,
+      "pred": 8.7,
       "uncertainty": 0.5
     },
-    "tt0137523": {
-      "pred": 9.53,
+    "tt0112384": {
+      "pred": 8.79,
+      "uncertainty": 0.31
+    },
+    "tt0082198": {
+      "pred": 7.61,
+      "uncertainty": 0.73
+    },
+    "tt0100802": {
+      "pred": 8.29,
       "uncertainty": 0.48
     },
+    "tt0103772": {
+      "pred": 8.12,
+      "uncertainty": 0.52
+    },
+    "tt0061722": {
+      "pred": 9.17,
+      "uncertainty": 0.43
+    },
+    "tt0107614": {
+      "pred": 7.93,
+      "uncertainty": 0.38
+    },
+    "tt0137523": {
+      "pred": 9.61,
+      "uncertainty": 0.36
+    },
     "tt0146882": {
-      "pred": 8.69,
-      "uncertainty": 0.46
+      "pred": 8.78,
+      "uncertainty": 0.41
     },
     "tt0119229": {
-      "pred": 8.61,
-      "uncertainty": 0.46
+      "pred": 8.72,
+      "uncertainty": 0.45
     },
     "tt0112697": {
-      "pred": 8.26,
-      "uncertainty": 0.65
+      "pred": 7.98,
+      "uncertainty": 0.45
     },
     "tt1375666": {
       "pred": 9.52,
-      "uncertainty": 0.39
+      "uncertainty": 0.3
     },
     "tt0071853": {
-      "pred": 9.04,
-      "uncertainty": 0.52
+      "pred": 9.57,
+      "uncertainty": 0.39
     },
     "tt0079470": {
-      "pred": 8.88,
-      "uncertainty": 0.5
+      "pred": 8.92,
+      "uncertainty": 0.42
     },
     "tt8946378": {
-      "pred": 8.47,
-      "uncertainty": 3.27
+      "pred": 7.79,
+      "uncertainty": 4.83
     },
     "tt1231587": {
-      "pred": 7.37,
-      "uncertainty": 0.69
+      "pred": 8.14,
+      "uncertainty": 0.84
     },
     "tt1119646": {
-      "pred": 8.21,
-      "uncertainty": 0.6
+      "pred": 8.62,
+      "uncertainty": 0.58
     },
     "tt2209418": {
-      "pred": 9.21,
-      "uncertainty": 0.67
+      "pred": 9.23,
+      "uncertainty": 0.91
     },
     "tt0381681": {
-      "pred": 9.39,
-      "uncertainty": 0.69
-    },
-    "tt0112471": {
-      "pred": 9.36,
-      "uncertainty": 0.6
-    },
-    "tt0103855": {
-      "pred": 7.94,
+      "pred": 9.55,
       "uncertainty": 0.67
     },
-    "tt0089017": {
-      "pred": 7.87,
-      "uncertainty": 0.65
-    },
-    "tt0048605": {
-      "pred": 8.28,
-      "uncertainty": 0.53
-    },
-    "tt0053291": {
-      "pred": 9.18,
-      "uncertainty": 0.46
-    },
-    "tt0045152": {
-      "pred": 9.04,
+    "tt0112471": {
+      "pred": 9.29,
       "uncertainty": 0.54
     },
+    "tt0103855": {
+      "pred": 6.81,
+      "uncertainty": 0.63
+    },
+    "tt0089017": {
+      "pred": 7.44,
+      "uncertainty": 0.9
+    },
+    "tt0048605": {
+      "pred": 8.5,
+      "uncertainty": 0.85
+    },
+    "tt0053291": {
+      "pred": 9.17,
+      "uncertainty": 0.38
+    },
+    "tt0045152": {
+      "pred": 9.15,
+      "uncertainty": 0.59
+    },
     "tt0217869": {
-      "pred": 8.26,
-      "uncertainty": 0.35
+      "pred": 8.23,
+      "uncertainty": 0.5
     },
     "tt0167404": {
-      "pred": 9.27,
+      "pred": 9.19,
       "uncertainty": 0.34
     },
     "tt0449059": {
-      "pred": 8.76,
-      "uncertainty": 0.58
-    },
-    "tt0090605": {
-      "pred": 8.89,
-      "uncertainty": 0.59
-    },
-    "tt0078748": {
-      "pred": 9.01,
-      "uncertainty": 0.55
-    },
-    "tt0083866": {
-      "pred": 8.44,
-      "uncertainty": 0.5
-    },
-    "tt1302006": {
-      "pred": 8.6,
-      "uncertainty": 2.06
-    },
-    "tt0108550": {
-      "pred": 8.87,
-      "uncertainty": 0.39
-    },
-    "tt0101540": {
-      "pred": 8.71,
-      "uncertainty": 0.48
-    },
-    "tt0103064": {
-      "pred": 8.93,
+      "pred": 9.13,
       "uncertainty": 0.47
     },
-    "tt0088247": {
-      "pred": 8.71,
-      "uncertainty": 0.53
+    "tt0090605": {
+      "pred": 8.76,
+      "uncertainty": 0.41
     },
-    "tt0086879": {
-      "pred": 9.18,
+    "tt0078748": {
+      "pred": 8.88,
+      "uncertainty": 0.51
+    },
+    "tt0083866": {
+      "pred": 8.7,
+      "uncertainty": 0.47
+    },
+    "tt1302006": {
+      "pred": 7.31,
+      "uncertainty": 4.62
+    },
+    "tt0108550": {
+      "pred": 9.05,
       "uncertainty": 0.4
     },
-    "tt0125439": {
+    "tt0101540": {
       "pred": 8.47,
-      "uncertainty": 0.49
+      "uncertainty": 0.56
     },
-    "tt0107048": {
-      "pred": 9.12,
-      "uncertainty": 0.48
+    "tt0103064": {
+      "pred": 8.8,
+      "uncertainty": 0.37
     },
-    "tt0105323": {
-      "pred": 9.0,
-      "uncertainty": 0.43
+    "tt0088247": {
+      "pred": 8.64,
+      "uncertainty": 0.46
     },
-    "tt0112864": {
-      "pred": 8.39,
-      "uncertainty": 0.38
+    "tt0086879": {
+      "pred": 9.32,
+      "uncertainty": 0.45
     },
-    "tt0830515": {
-      "pred": 7.66,
-      "uncertainty": 0.63
-    },
-    "tt2379713": {
-      "pred": 7.98,
-      "uncertainty": 0.64
-    },
-    "tt1074638": {
-      "pred": 8.65,
-      "uncertainty": 0.52
-    },
-    "tt0381061": {
-      "pred": 8.63,
-      "uncertainty": 0.48
-    },
-    "tt0440963": {
-      "pred": 8.87,
-      "uncertainty": 0.48
-    },
-    "tt0372183": {
-      "pred": 8.84,
+    "tt0125439": {
+      "pred": 8.59,
       "uncertainty": 0.54
     },
-    "tt0258463": {
+    "tt0107048": {
+      "pred": 8.96,
+      "uncertainty": 0.36
+    },
+    "tt0105323": {
       "pred": 9.03,
+      "uncertainty": 0.6
+    },
+    "tt0112864": {
+      "pred": 8.08,
+      "uncertainty": 0.36
+    },
+    "tt0830515": {
+      "pred": 7.98,
+      "uncertainty": 0.61
+    },
+    "tt2379713": {
+      "pred": 8.28,
+      "uncertainty": 0.76
+    },
+    "tt1074638": {
+      "pred": 8.51,
+      "uncertainty": 0.57
+    },
+    "tt0381061": {
+      "pred": 8.9,
+      "uncertainty": 0.38
+    },
+    "tt0440963": {
+      "pred": 8.99,
+      "uncertainty": 0.4
+    },
+    "tt0372183": {
+      "pred": 8.9,
+      "uncertainty": 0.45
+    },
+    "tt0258463": {
+      "pred": 9.0,
       "uncertainty": 0.39
     },
     "tt3659388": {
-      "pred": 9.24,
-      "uncertainty": 0.36
+      "pred": 9.05,
+      "uncertainty": 0.41
     },
     "tt1605783": {
       "pred": 9.04,
-      "uncertainty": 0.36
-    },
-    "tt0378194": {
-      "pred": 8.77,
-      "uncertainty": 0.64
-    },
-    "tt0266697": {
-      "pred": 8.67,
-      "uncertainty": 0.67
-    },
-    "tt0063462": {
-      "pred": 8.39,
-      "uncertainty": 0.53
-    },
-    "tt0147800": {
-      "pred": 8.84,
-      "uncertainty": 0.54
-    },
-    "tt0151804": {
-      "pred": 9.16,
-      "uncertainty": 0.38
-    },
-    "tt0091867": {
-      "pred": 8.97,
-      "uncertainty": 0.58
-    },
-    "tt0095016": {
-      "pred": 9.0,
-      "uncertainty": 0.47
-    },
-    "tt0119396": {
-      "pred": 8.89,
-      "uncertainty": 0.4
-    },
-    "tt0105236": {
-      "pred": 8.97,
       "uncertainty": 0.52
     },
-    "tt0110912": {
-      "pred": 9.26,
-      "uncertainty": 0.57
+    "tt0378194": {
+      "pred": 8.82,
+      "uncertainty": 0.51
     },
-    "tt0097165": {
-      "pred": 9.27,
-      "uncertainty": 0.42
+    "tt0266697": {
+      "pred": 8.94,
+      "uncertainty": 0.53
     },
-    "tt1262426": {
-      "pred": 6.85,
-      "uncertainty": 2.98
+    "tt0063462": {
+      "pred": 8.96,
+      "uncertainty": 0.63
     },
-    "tt0093779": {
-      "pred": 9.25,
+    "tt0147800": {
+      "pred": 8.42,
+      "uncertainty": 0.48
+    },
+    "tt0151804": {
+      "pred": 9.14,
+      "uncertainty": 0.34
+    },
+    "tt0091867": {
+      "pred": 8.9,
+      "uncertainty": 0.61
+    },
+    "tt0095016": {
+      "pred": 8.77,
       "uncertainty": 0.46
     },
+    "tt0119396": {
+      "pred": 8.64,
+      "uncertainty": 0.51
+    },
+    "tt0105236": {
+      "pred": 9.14,
+      "uncertainty": 0.41
+    },
+    "tt0110912": {
+      "pred": 9.5,
+      "uncertainty": 0.44
+    },
+    "tt0097165": {
+      "pred": 9.09,
+      "uncertainty": 0.4
+    },
+    "tt1262426": {
+      "pred": 7.02,
+      "uncertainty": 4.66
+    },
+    "tt0093779": {
+      "pred": 9.45,
+      "uncertainty": 0.38
+    },
     "tt0113277": {
-      "pred": 9.1,
-      "uncertainty": 0.43
+      "pred": 8.93,
+      "uncertainty": 0.41
     },
     "tt0369339": {
-      "pred": 8.62,
-      "uncertainty": 0.37
+      "pred": 8.5,
+      "uncertainty": 0.49
     }
   }
 }

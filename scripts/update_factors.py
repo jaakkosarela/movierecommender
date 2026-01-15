@@ -547,10 +547,24 @@ def fit_user_with_comparisons(
         user_bias_mu = nn.Parameter(torch.tensor(0.0))
         user_bias_log_std = nn.Parameter(torch.tensor(-1.0))
 
-    # Prepare IMDb ratings
-    imdb_item_indices = torch.tensor(list(imdb_ratings.keys()), dtype=torch.long)
-    imdb_rating_values = torch.tensor(list(imdb_ratings.values()), dtype=torch.float32)
-    imdb_weights = torch.ones(len(imdb_ratings))  # Uniform weight for IMDb
+    # Find items with updated ratings (elicitation overrides IMDb)
+    updated_item_indices = set()
+    for r in elicitation_ratings:
+        tconst = r["tconst"]
+        if tconst in tconst_to_idx:
+            updated_item_indices.add(tconst_to_idx[tconst])
+
+    # Prepare IMDb ratings (excluding items with updated ratings)
+    filtered_imdb = {
+        idx: rating for idx, rating in imdb_ratings.items()
+        if idx not in updated_item_indices
+    }
+    imdb_item_indices = torch.tensor(list(filtered_imdb.keys()), dtype=torch.long)
+    imdb_rating_values = torch.tensor(list(filtered_imdb.values()), dtype=torch.float32)
+    imdb_weights = torch.ones(len(filtered_imdb))  # Uniform weight for IMDb
+
+    if updated_item_indices and verbose:
+        print(f"  Using updated ratings for {len(updated_item_indices)} items (overriding IMDb)")
 
     # Prepare elicitation ratings
     elic_item_indices = []
@@ -625,7 +639,7 @@ def fit_user_with_comparisons(
 
     if verbose:
         print(f"Fitting user factors:")
-        print(f"  IMDb ratings: {len(imdb_ratings)}")
+        print(f"  IMDb ratings: {len(filtered_imdb)} (of {len(imdb_ratings)} original)")
         print(f"  Elicitation ratings: {len(elic_item_indices)}")
         print(f"  Comparisons: {len(comp_item_a)}")
 
@@ -722,7 +736,7 @@ def fit_user_with_comparisons(
         (init_checkpoint.n_comparisons_used if init_checkpoint else 0)
         + len(comp_item_a)
     )
-    n_ratings = len(imdb_ratings) + len(elic_item_indices)
+    n_ratings = len(filtered_imdb) + len(elic_item_indices)
 
     return UserCheckpoint(
         theta_mu=user_mu.detach(),
@@ -811,13 +825,26 @@ def main():
         print(f"  Comparisons watermark: {init_checkpoint.comparisons_watermark}")
         print(f"  Ratings watermark: {init_checkpoint.ratings_watermark}")
 
+        # Check if checkpoint dimensions match model
+        checkpoint_k = init_checkpoint.theta_mu.shape[0]
+        model_k = model.n_factors
+        if checkpoint_k != model_k:
+            print(f"  WARNING: Checkpoint has K={checkpoint_k}, model has K={model_k}")
+            print(f"  Starting fresh (ignoring checkpoint)")
+            init_checkpoint = None
+
     # Get new comparisons and ratings
     logger = ComparisonLogger()
 
-    comp_watermark = init_checkpoint.comparisons_watermark if init_checkpoint else 0
-    new_comparisons = logger.get_comparisons_after(comp_watermark)
+    # If no valid checkpoint, load ALL data (not just new)
+    if init_checkpoint is None:
+        comp_watermark = 0
+        rating_watermark = None
+    else:
+        comp_watermark = init_checkpoint.comparisons_watermark
+        rating_watermark = init_checkpoint.ratings_watermark
 
-    rating_watermark = init_checkpoint.ratings_watermark if init_checkpoint else None
+    new_comparisons = logger.get_comparisons_after(comp_watermark)
     new_ratings = logger.get_ratings_after(rating_watermark)
 
     print(f"New comparisons: {len(new_comparisons)}")
